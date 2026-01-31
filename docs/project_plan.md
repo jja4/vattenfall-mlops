@@ -2,7 +2,7 @@
 
 ## 1. Project Initialization
 - [x] Initialize project folder structure with skeleton files.
-- [ ] Configure `uv` project (`pyproject.toml`) and install dependencies (`fastapi`, `pandas`, `scikit-learn`, `wandb`, `requests`, `uvicorn`, `python-dotenv`).
+- [x] Configure `uv` project (`pyproject.toml`) and install dependencies (`fastapi`, `pandas`, `scikit-learn`, `wandb`, `requests`, `uvicorn`, `python-dotenv`).
 
 ## 2. Ingestion Layer
 - [ ] Implement `ingestion/client.py`: Fingrid API wrapper.
