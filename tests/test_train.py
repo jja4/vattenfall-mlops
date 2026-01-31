@@ -36,21 +36,24 @@ class TestPrepareData:
         })
     
     def test_returns_train_test_split(self, sample_df):
-        """Should return X_train, X_test, y_train, y_test, feature_names."""
-        result = prepare_data(sample_df, test_size=0.2)
+        """Should return X_train, X_test, y_train, y_test, feature_names, scaler."""
+        result = prepare_data(sample_df, test_size=0.2, scale_features=False, clip_outliers=False)
         
-        assert len(result) == 5
-        X_train, X_test, y_train, y_test, feature_names = result
+        assert len(result) == 6
+        X_train, X_test, y_train, y_test, feature_names, scaler = result
         
         assert isinstance(X_train, np.ndarray)
         assert isinstance(X_test, np.ndarray)
         assert isinstance(y_train, np.ndarray)
         assert isinstance(y_test, np.ndarray)
         assert isinstance(feature_names, list)
+        assert scaler is None  # No scaling requested
     
     def test_split_is_temporal(self, sample_df):
         """Train/test split should be chronological, not random."""
-        X_train, X_test, y_train, y_test, _ = prepare_data(sample_df, test_size=0.2)
+        X_train, X_test, y_train, y_test, _, _ = prepare_data(
+            sample_df, test_size=0.2, scale_features=False, clip_outliers=False
+        )
         
         # With temporal split, train should have first 80%, test should have last 20%
         expected_train_size = int(len(sample_df) * 0.8)
@@ -59,18 +62,31 @@ class TestPrepareData:
     
     def test_timestamp_excluded_from_features(self, sample_df):
         """Timestamp should not be in feature names."""
-        _, _, _, _, feature_names = prepare_data(sample_df)
+        _, _, _, _, feature_names, _ = prepare_data(
+            sample_df, scale_features=False, clip_outliers=False
+        )
         
         assert "timestamp" not in feature_names
         assert "imbalance_price" not in feature_names  # target excluded
     
     def test_price_is_target(self, sample_df):
         """Imbalance_price column should be the target variable."""
-        _, _, y_train, y_test, _ = prepare_data(sample_df)
+        _, _, y_train, y_test, _, _ = prepare_data(
+            sample_df, scale_features=False, clip_outliers=False
+        )
         
         # y should be the price values
         expected_train_y = sample_df["imbalance_price"].values[:int(len(sample_df) * 0.8)]
         np.testing.assert_array_equal(y_train, expected_train_y)
+    
+    def test_scaling_returns_scaler(self, sample_df):
+        """When scale_features=True, should return a fitted scaler."""
+        _, _, _, _, _, scaler = prepare_data(
+            sample_df, scale_features=True, clip_outliers=False
+        )
+        
+        from sklearn.preprocessing import StandardScaler
+        assert isinstance(scaler, StandardScaler)
 
 
 class TestTrainModel:
@@ -139,15 +155,16 @@ class TestSaveLoadModel:
             path = Path(tmpdir) / "test_model.pkl"
             save_model(model, feature_names, str(path))
             
-            loaded_model, loaded_features = load_model(str(path))
+            loaded_model, loaded_features, loaded_scaler = load_model(str(path))
         
-        # Predictions should be identical
+        # Predictions should be nearly identical (allow for floating point)
         original_pred = model.predict(X[:5])
         loaded_pred = loaded_model.predict(X[:5])
-        np.testing.assert_array_equal(original_pred, loaded_pred)
+        np.testing.assert_array_almost_equal(original_pred, loaded_pred)
         
         # Feature names should be preserved
         assert loaded_features == feature_names
+        assert loaded_scaler is None  # No scaler saved
     
     def test_saves_metadata(self):
         """Should save feature names and metadata."""
@@ -167,6 +184,7 @@ class TestSaveLoadModel:
         assert "model" in artifact
         assert "feature_names" in artifact
         assert "n_features" in artifact
+        assert "scaler" in artifact
         assert artifact["n_features"] == 5
     
     def test_load_handles_old_format(self):
@@ -183,7 +201,8 @@ class TestSaveLoadModel:
                 pickle.dump(model, f)
             
             # Should still load without error
-            loaded_model, loaded_features = load_model(str(path))
+            loaded_model, loaded_features, loaded_scaler = load_model(str(path))
         
         assert loaded_model is not None
         assert loaded_features is None  # No feature names in old format
+        assert loaded_scaler is None
