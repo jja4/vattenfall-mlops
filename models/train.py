@@ -142,22 +142,53 @@ def evaluate_model(model, X, y, split_name="test"):
     return metrics
 
 
-def save_model(model, output_path="models/model.pkl"):
+def save_model(model, feature_names, output_path="models/model.pkl"):
     """
-    Save trained model to disk.
+    Save trained model and feature metadata to disk.
     
     Args:
         model: Trained model
+        feature_names: List of feature names (order matters for prediction)
         output_path: Path to save the model
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
+    # Save model with metadata for safe loading later
+    model_artifact = {
+        "model": model,
+        "feature_names": list(feature_names),
+        "n_features": len(feature_names),
+        "created_at": datetime.now().isoformat()
+    }
+    
     with open(output_path, "wb") as f:
-        pickle.dump(model, f)
+        pickle.dump(model_artifact, f)
     
     print(f"\n💾 Model saved to: {output_path}")
     print(f"   Size: {output_path.stat().st_size / 1024:.1f} KB")
+    print(f"   Features: {len(feature_names)}")
+
+
+def load_model(model_path="models/model.pkl"):
+    """
+    Load trained model and feature metadata from disk.
+    
+    Args:
+        model_path: Path to the saved model
+        
+    Returns:
+        Tuple of (model, feature_names)
+    """
+    with open(model_path, "rb") as f:
+        artifact = pickle.load(f)
+    
+    # Handle both old format (just model) and new format (dict with metadata)
+    if isinstance(artifact, dict):
+        return artifact["model"], artifact["feature_names"]
+    else:
+        # Old format - model only, no feature names
+        return artifact, None
 
 
 def main():
@@ -262,8 +293,8 @@ def main():
             "train_test_gap": test_metrics['test_mae'] - train_metrics['train_mae']
         })
     
-    # Save model
-    save_model(model, args.output)
+    # Save model with feature names
+    save_model(model, feature_names, args.output)
     
     if use_wandb:
         # Save model to W&B
