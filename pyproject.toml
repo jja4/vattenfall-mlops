@@ -17,8 +17,8 @@ dependencies = [
     "python-dateutil>=2.9.0.post0",
 ]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest",
     "ruff",
     "black"
