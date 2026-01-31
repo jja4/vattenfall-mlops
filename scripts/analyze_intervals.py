@@ -1,5 +1,8 @@
 """
 Analyze the temporal patterns of each dataset.
+
+Usage:
+    uv run python -m scripts.analyze_intervals
 """
 import pandas as pd
 from ingestion.storage import load_parquet

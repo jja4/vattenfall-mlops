@@ -1,7 +1,10 @@
 """
 Quick verification script to inspect fetched data.
+
+Usage:
+    uv run python -m scripts.verify_data
 """
-from .storage import load_parquet
+from ingestion.storage import load_parquet
 
 def verify_dataset(name: str):
     """Verify structure and quality of a dataset."""
