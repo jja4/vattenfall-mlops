@@ -21,14 +21,14 @@
     - [x] `create_features(df)`: Add lag features (e.g., `price_lag_1h`), rolling means, hour-of-day.
 
 ## 4. Modeling Layer
-- [ ] Create `models/train.py`:
-    - [ ] CLI args for date range.
-    - [ ] Fetch/Load data using `ingestion` module.
-    - [ ] Split Train/Test.
-    - [ ] Train Model (e.g., `RandomForestRegressor`).
-    - [ ] Evaluate (MAE, RMSE).
+- [x] Create `models/train.py`:
+    - [x] CLI args for training parameters.
+    - [x] Fetch/Load data using `ingestion` module.
+    - [x] Split Train/Test.
+    - [x] Train Model (e.g., `RandomForestRegressor`).
+    - [x] Evaluate (MAE, RMSE).
     - [ ] Integration with Weights & Biases (`wandb.init`, `wandb.log`).
-    - [ ] Serialization: Save `model.pkl`.
+    - [x] Serialization: Save `model.pkl`.
 
 ## 5. Serving Layer (FastAPI)
 - [ ] Implement `app/schemas.py`: Pydantic models for Input/Output.
