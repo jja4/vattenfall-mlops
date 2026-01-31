@@ -10,10 +10,15 @@ PERIODS_PER_HOUR = 4  # 60 min / 15 min = 4 periods per hour
 LAG_1H = PERIODS_PER_HOUR * 1   # 4 periods
 LAG_2H = PERIODS_PER_HOUR * 2   # 8 periods
 LAG_3H = PERIODS_PER_HOUR * 3   # 12 periods
+LAG_6H = PERIODS_PER_HOUR * 6   # 24 periods
+LAG_12H = PERIODS_PER_HOUR * 12 # 48 periods
+LAG_24H = PERIODS_PER_HOUR * 24 # 96 periods (same time yesterday)
 
 # Rolling window periods
 ROLLING_1H = PERIODS_PER_HOUR * 1   # 4 periods
 ROLLING_3H = PERIODS_PER_HOUR * 3   # 12 periods
+ROLLING_6H = PERIODS_PER_HOUR * 6   # 24 periods
+ROLLING_24H = PERIODS_PER_HOUR * 24 # 96 periods
 
 # Required columns for validation
 REQUIRED_RAW_COLUMNS = {
@@ -97,7 +102,7 @@ def merge_datasets(wind_df: pd.DataFrame, mfrr_df: pd.DataFrame, price_df: pd.Da
 def create_lag_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create lag features for temporal patterns.
-    Uses 1h, 2h, and 3h lags (corresponding to LAG_1H, LAG_2H, LAG_3H periods).
+    Uses multiple lag horizons to capture short and long-term dependencies.
     
     Args:
         df: DataFrame with timestamp and value columns
@@ -107,25 +112,35 @@ def create_lag_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     
-    # 1-hour lag
+    # Price lags - most important for prediction
     df["price_lag_1h"] = df["imbalance_price"].shift(LAG_1H)
-    df["wind_lag_1h"] = df["wind_power_mw"].shift(LAG_1H)
-    df["mfrr_lag_1h"] = df["mfrr_price"].shift(LAG_1H)
-    
-    # 2-hour lag
     df["price_lag_2h"] = df["imbalance_price"].shift(LAG_2H)
-    df["wind_lag_2h"] = df["wind_power_mw"].shift(LAG_2H)
-    
-    # 3-hour lag
     df["price_lag_3h"] = df["imbalance_price"].shift(LAG_3H)
+    df["price_lag_6h"] = df["imbalance_price"].shift(LAG_6H)
+    df["price_lag_12h"] = df["imbalance_price"].shift(LAG_12H)
+    df["price_lag_24h"] = df["imbalance_price"].shift(LAG_24H)  # Same time yesterday
+    
+    # Wind lags - key driver of price
+    df["wind_lag_1h"] = df["wind_power_mw"].shift(LAG_1H)
+    df["wind_lag_2h"] = df["wind_power_mw"].shift(LAG_2H)
+    df["wind_lag_6h"] = df["wind_power_mw"].shift(LAG_6H)
+    df["wind_lag_24h"] = df["wind_power_mw"].shift(LAG_24H)
+    
+    # mFRR lags
+    df["mfrr_lag_1h"] = df["mfrr_price"].shift(LAG_1H)
+    df["mfrr_lag_3h"] = df["mfrr_price"].shift(LAG_3H)
+    
+    # Price change features (momentum)
+    df["price_change_1h"] = df["imbalance_price"].shift(LAG_1H) - df["imbalance_price"].shift(LAG_2H)
+    df["price_change_3h"] = df["imbalance_price"].shift(LAG_1H) - df["imbalance_price"].shift(LAG_1H + LAG_3H)
     
     return df
 
 
 def create_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Create rolling mean features to capture trends.
-    Uses 1-hour and 3-hour windows, shifted to avoid data leakage.
+    Create rolling statistics to capture trends and volatility.
+    Uses multiple window sizes, all shifted by 1 to avoid data leakage.
     
     Args:
         df: DataFrame with timestamp and value columns
@@ -135,20 +150,32 @@ def create_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     
-    # 1-hour rolling mean, shifted by 1 to avoid leakage
+    # Rolling means - capture trends
     df["price_rolling_1h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_1H).mean()
-    df["wind_rolling_1h"] = df["wind_power_mw"].shift(1).rolling(window=ROLLING_1H).mean()
-    
-    # 3-hour rolling mean
     df["price_rolling_3h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_3H).mean()
+    df["price_rolling_6h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_6H).mean()
+    df["price_rolling_24h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_24H).mean()
+    
+    df["wind_rolling_1h"] = df["wind_power_mw"].shift(1).rolling(window=ROLLING_1H).mean()
     df["wind_rolling_3h"] = df["wind_power_mw"].shift(1).rolling(window=ROLLING_3H).mean()
+    df["wind_rolling_6h"] = df["wind_power_mw"].shift(1).rolling(window=ROLLING_6H).mean()
+    
+    # Rolling standard deviation - capture volatility
+    df["price_volatility_3h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_3H).std()
+    df["price_volatility_6h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_6H).std()
+    df["wind_volatility_3h"] = df["wind_power_mw"].shift(1).rolling(window=ROLLING_3H).std()
+    
+    # Rolling min/max - capture range
+    df["price_min_6h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_6H).min()
+    df["price_max_6h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_6H).max()
+    df["price_range_6h"] = df["price_max_6h"] - df["price_min_6h"]
     
     return df
 
 
 def create_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Create time-based features to capture diurnal patterns.
+    Create time-based features to capture diurnal and seasonal patterns.
     
     Args:
         df: DataFrame with timestamp column
@@ -158,14 +185,35 @@ def create_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     
-    # Hour of day (0-23)
+    # Hour of day (0-23) - captures daily price patterns
     df["hour_of_day"] = df["timestamp"].dt.hour
+    
+    # Cyclical encoding of hour (better for models)
+    import numpy as np
+    df["hour_sin"] = np.sin(2 * np.pi * df["hour_of_day"] / 24)
+    df["hour_cos"] = np.cos(2 * np.pi * df["hour_of_day"] / 24)
     
     # Day of week (0=Monday, 6=Sunday)
     df["day_of_week"] = df["timestamp"].dt.dayofweek
     
+    # Cyclical encoding of day of week
+    df["dow_sin"] = np.sin(2 * np.pi * df["day_of_week"] / 7)
+    df["dow_cos"] = np.cos(2 * np.pi * df["day_of_week"] / 7)
+    
     # Is weekend
     df["is_weekend"] = (df["day_of_week"] >= 5).astype(int)
+    
+    # Month (captures seasonal patterns)
+    df["month"] = df["timestamp"].dt.month
+    df["month_sin"] = np.sin(2 * np.pi * df["month"] / 12)
+    df["month_cos"] = np.cos(2 * np.pi * df["month"] / 12)
+    
+    # Peak hours (typically 8-20 in Finland)
+    df["is_peak_hour"] = ((df["hour_of_day"] >= 8) & (df["hour_of_day"] <= 20)).astype(int)
+    
+    # Morning ramp (6-9), evening peak (17-20)
+    df["is_morning_ramp"] = ((df["hour_of_day"] >= 6) & (df["hour_of_day"] <= 9)).astype(int)
+    df["is_evening_peak"] = ((df["hour_of_day"] >= 17) & (df["hour_of_day"] <= 20)).astype(int)
     
     return df
 
@@ -244,13 +292,13 @@ def process_features(df: pd.DataFrame = None, use_cache: bool = True) -> pd.Data
     # Feature engineering
     print("\n🔧 Creating features...")
     df = create_lag_features(df)
-    print("  ✓ Lag features (1h, 2h, 3h)")
+    print("  ✓ Lag features (1h, 2h, 3h, 6h, 12h, 24h + momentum)")
     
     df = create_rolling_features(df)
-    print("  ✓ Rolling means (1h, 3h)")
+    print("  ✓ Rolling statistics (mean, std, min/max)")
     
     df = create_temporal_features(df)
-    print("  ✓ Temporal features (hour, day, weekend)")
+    print("  ✓ Temporal features (hour, day, month + cyclical encoding)")
     
     # Drop rows with NaN from lag/rolling operations
     initial_len = len(df)
