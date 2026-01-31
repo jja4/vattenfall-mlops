@@ -1,5 +1,42 @@
 import pandas as pd
-from .storage import load_parquet
+from .storage import load_parquet, save_processed, load_processed
+
+# =============================================================================
+# Constants for time intervals (15-minute resolution)
+# =============================================================================
+PERIODS_PER_HOUR = 4  # 60 min / 15 min = 4 periods per hour
+
+# Lag feature periods
+LAG_1H = PERIODS_PER_HOUR * 1   # 4 periods
+LAG_2H = PERIODS_PER_HOUR * 2   # 8 periods
+LAG_3H = PERIODS_PER_HOUR * 3   # 12 periods
+
+# Rolling window periods
+ROLLING_1H = PERIODS_PER_HOUR * 1   # 4 periods
+ROLLING_3H = PERIODS_PER_HOUR * 3   # 12 periods
+
+# Required columns for validation
+REQUIRED_RAW_COLUMNS = {
+    "wind": {"timestamp", "wind_power_mw"},
+    "mfrr": {"timestamp", "mfrr_price"},
+    "price": {"timestamp", "imbalance_price"},
+}
+REQUIRED_MERGED_COLUMNS = {"timestamp", "wind_power_mw", "mfrr_price", "imbalance_price"}
+
+
+def validate_dataframe(df: pd.DataFrame, required_columns: set, name: str = "DataFrame"):
+    """Validate that a DataFrame contains required columns."""
+    if df is None:
+        raise ValueError(f"{name} is None - data may not be loaded")
+    
+    missing = required_columns - set(df.columns)
+    if missing:
+        raise ValueError(f"{name} missing required columns: {missing}")
+    
+    if df.empty:
+        raise ValueError(f"{name} is empty")
+    
+    return True
 
 
 def resample_to_15min(df: pd.DataFrame, value_col: str, method: str = "mean") -> pd.DataFrame:
@@ -60,7 +97,7 @@ def merge_datasets(wind_df: pd.DataFrame, mfrr_df: pd.DataFrame, price_df: pd.Da
 def create_lag_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Create lag features for temporal patterns.
-    Uses 1h, 2h, and 3h lags (corresponding to 4, 8, 12 periods at 15-min intervals).
+    Uses 1h, 2h, and 3h lags (corresponding to LAG_1H, LAG_2H, LAG_3H periods).
     
     Args:
         df: DataFrame with timestamp and value columns
@@ -70,17 +107,17 @@ def create_lag_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     
-    # 1-hour lag (4 periods * 15min)
-    df["price_lag_1h"] = df["imbalance_price"].shift(4)
-    df["wind_lag_1h"] = df["wind_power_mw"].shift(4)
-    df["mfrr_lag_1h"] = df["mfrr_price"].shift(4)
+    # 1-hour lag
+    df["price_lag_1h"] = df["imbalance_price"].shift(LAG_1H)
+    df["wind_lag_1h"] = df["wind_power_mw"].shift(LAG_1H)
+    df["mfrr_lag_1h"] = df["mfrr_price"].shift(LAG_1H)
     
-    # 2-hour lag (8 periods)
-    df["price_lag_2h"] = df["imbalance_price"].shift(8)
-    df["wind_lag_2h"] = df["wind_power_mw"].shift(8)
+    # 2-hour lag
+    df["price_lag_2h"] = df["imbalance_price"].shift(LAG_2H)
+    df["wind_lag_2h"] = df["wind_power_mw"].shift(LAG_2H)
     
-    # 3-hour lag (12 periods)
-    df["price_lag_3h"] = df["imbalance_price"].shift(12)
+    # 3-hour lag
+    df["price_lag_3h"] = df["imbalance_price"].shift(LAG_3H)
     
     return df
 
@@ -98,13 +135,13 @@ def create_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
     
-    # 1-hour rolling mean (4 periods * 15min), shifted by 1 to avoid leakage
-    df["price_rolling_1h"] = df["imbalance_price"].shift(1).rolling(window=4).mean()
-    df["wind_rolling_1h"] = df["wind_power_mw"].shift(1).rolling(window=4).mean()
+    # 1-hour rolling mean, shifted by 1 to avoid leakage
+    df["price_rolling_1h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_1H).mean()
+    df["wind_rolling_1h"] = df["wind_power_mw"].shift(1).rolling(window=ROLLING_1H).mean()
     
-    # 3-hour rolling mean (12 periods)
-    df["price_rolling_3h"] = df["imbalance_price"].shift(1).rolling(window=12).mean()
-    df["wind_rolling_3h"] = df["wind_power_mw"].shift(1).rolling(window=12).mean()
+    # 3-hour rolling mean
+    df["price_rolling_3h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_3H).mean()
+    df["wind_rolling_3h"] = df["wind_power_mw"].shift(1).rolling(window=ROLLING_3H).mean()
     
     return df
 
@@ -133,24 +170,40 @@ def create_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def process_features(df: pd.DataFrame = None) -> pd.DataFrame:
+def process_features(df: pd.DataFrame = None, use_cache: bool = True) -> pd.DataFrame:
     """
     Complete feature engineering pipeline.
     
     If df is None, loads raw data from storage, otherwise processes provided DataFrame.
+    Uses cache by default to avoid reprocessing.
     
     Steps:
-    1. Load raw data
-    2. Resample to 15-minute intervals
-    3. Merge datasets
-    4. Create lag features
-    5. Create rolling features
-    6. Create temporal features
-    7. Drop rows with NaN (from lag/rolling operations)
+    1. Check cache (if use_cache=True)
+    2. Load raw data
+    3. Validate data
+    4. Resample to 15-minute intervals
+    5. Merge datasets
+    6. Create lag features
+    7. Create rolling features
+    8. Create temporal features
+    9. Drop rows with NaN (from lag/rolling operations)
+    10. Cache result
+    
+    Args:
+        df: Optional pre-loaded DataFrame to process
+        use_cache: If True, use cached processed data if available
     
     Returns:
         DataFrame ready for model training
     """
+    # Check cache first
+    if df is None and use_cache:
+        cached = load_processed("features")
+        if cached is not None:
+            print("📦 Using cached processed data")
+            print(f"  Shape: {cached.shape}")
+            return cached
+    
     if df is None:
         print("📥 Loading raw data...")
         wind_df = load_parquet("wind")
@@ -160,9 +213,14 @@ def process_features(df: pd.DataFrame = None) -> pd.DataFrame:
         if wind_df is None or mfrr_df is None or price_df is None:
             raise ValueError("Missing raw data. Run ingestion pipeline first.")
         
-        print(f"  Wind: {len(wind_df):,} rows")
-        print(f"  mFRR: {len(mfrr_df):,} rows")
-        print(f"  Price: {len(price_df):,} rows")
+        # Validate raw data
+        validate_dataframe(wind_df, REQUIRED_RAW_COLUMNS["wind"], "Wind data")
+        validate_dataframe(mfrr_df, REQUIRED_RAW_COLUMNS["mfrr"], "mFRR data")
+        validate_dataframe(price_df, REQUIRED_RAW_COLUMNS["price"], "Price data")
+        
+        print(f"  Wind: {len(wind_df):,} rows ✓")
+        print(f"  mFRR: {len(mfrr_df):,} rows ✓")
+        print(f"  Price: {len(price_df):,} rows ✓")
         
         # Resample to 15-minute intervals
         print("\n⏱️  Resampling to 15-minute intervals...")
@@ -179,6 +237,9 @@ def process_features(df: pd.DataFrame = None) -> pd.DataFrame:
         print("\n🔗 Merging datasets...")
         df = merge_datasets(wind_df, mfrr_df, price_df)
         print(f"  Merged: {len(df):,} rows")
+        
+        # Validate merged data
+        validate_dataframe(df, REQUIRED_MERGED_COLUMNS, "Merged data")
     
     # Feature engineering
     print("\n🔧 Creating features...")
@@ -196,6 +257,10 @@ def process_features(df: pd.DataFrame = None) -> pd.DataFrame:
     df = df.dropna().reset_index(drop=True)
     print(f"\n🧹 Dropped {initial_len - len(df):,} rows with NaN (from lag/rolling)")
     print(f"  Final dataset: {len(df):,} rows with {len(df.columns)} features")
+    
+    # Cache the processed data
+    if use_cache:
+        save_processed(df, "features")
     
     return df
 
