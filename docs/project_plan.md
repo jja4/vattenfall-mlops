@@ -15,10 +15,10 @@
 - [x] Implement `ingestion/pipeline.py`: Orchestrator to check cache -> fetch if missing -> save.
 
 ## 3. Data Processing
-- [ ] Implement `ingestion/processor.py`:
-    - [ ] `clean_data(df)`: Handle missing values (ffill/bfill).
-    - [ ] `merge_datasets(wind, mfrr, price)`: Join on timestamp.
-    - [ ] `create_features(df)`: Add lag features (e.g., `price_lag_1h`), rolling means, hour-of-day.
+- [x] Implement `ingestion/processor.py`:
+    - [x] `clean_data(df)`: Handle missing values (ffill/bfill).
+    - [x] `merge_datasets(wind, mfrr, price)`: Join on timestamp.
+    - [x] `create_features(df)`: Add lag features (e.g., `price_lag_1h`), rolling means, hour-of-day.
 
 ## 4. Modeling Layer
 - [ ] Create `models/train.py`:
