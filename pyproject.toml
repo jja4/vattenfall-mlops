@@ -1,0 +1,24 @@
+[project]
+name = "vattenfall"
+version = "0.1.0"
+description = "Real-time imbalance price prediction for Finland"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "requests",
+    "pandas",
+    "scikit-learn",
+    "python-dotenv",
+    "wandb",
+    "pyarrow",  # For parquet
+    "fastparquet"
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+    "ruff",
+    "black"
+]
