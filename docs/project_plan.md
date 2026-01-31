@@ -5,14 +5,14 @@
 - [x] Configure `uv` project (`pyproject.toml`) and install dependencies (`fastapi`, `pandas`, `scikit-learn`, `wandb`, `requests`, `uvicorn`, `python-dotenv`).
 
 ## 2. Ingestion Layer
-- [ ] Implement `ingestion/client.py`: Fingrid API wrapper.
-    - [ ] `Class FingridClient`: Helper to manage API key and base URL.
-    - [ ] Method `get_data(dataset_id, start_time, end_time)`: Generic fetcher.
-    - [ ] Convenience methods for Wind (181), mFRR (342), Price (319).
-- [ ] Implement `ingestion/storage.py`:
-    - [ ] `save_raw(df, name)`: Save to `data/raw/{name}.parquet`.
-    - [ ] `load_raw(name)`: Load from `data/raw/{name}.parquet`.
-- [ ] Implement `ingestion/pipeline.py`: Orchestrator to check cache -> fetch if missing -> save.
+- [x] Implement `ingestion/client.py`: Fingrid API wrapper.
+    - [x] `Class FingridClient`: Helper to manage API key and base URL.
+    - [x] Method `get_data(dataset_id, start_time, end_time)`: Generic fetcher.
+    - [x] Convenience methods for Wind (181), mFRR (342), Price (319).
+- [x] Implement `ingestion/storage.py`:
+    - [x] `save_raw(df, name)`: Save to `data/raw/{name}.parquet`.
+    - [x] `load_raw(name)`: Load from `data/raw/{name}.parquet`.
+- [x] Implement `ingestion/pipeline.py`: Orchestrator to check cache -> fetch if missing -> save.
 
 ## 3. Data Processing
 - [ ] Implement `ingestion/processor.py`:

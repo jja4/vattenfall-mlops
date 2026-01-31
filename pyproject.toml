@@ -12,8 +12,9 @@ dependencies = [
     "scikit-learn",
     "python-dotenv",
     "wandb",
-    "pyarrow",  # For parquet
-    "fastparquet"
+    "pyarrow", # For parquet
+    "fastparquet",
+    "python-dateutil>=2.9.0.post0",
 ]
 
 [tool.uv]
