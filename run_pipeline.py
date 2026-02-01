@@ -16,7 +16,9 @@ import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
+import pandas as pd
 from dotenv import load_dotenv
 
 # Load environment variables first
@@ -25,6 +27,7 @@ load_dotenv()
 
 def run_ingestion(start_date: str, end_date: str):
     """Run the ingestion pipeline to fetch Fingrid data."""
+    from datetime import datetime
     from ingestion.client import FingridClient
     from ingestion.storage import save_parquet
     
@@ -34,22 +37,26 @@ def run_ingestion(start_date: str, end_date: str):
     
     client = FingridClient()
     
+    # Convert string dates to datetime objects
+    start_dt = datetime.fromisoformat(start_date)
+    end_dt = datetime.fromisoformat(end_date)
+    
     # Fetch all datasets
     print(f"\n⏳ Fetching data from {start_date} to {end_date}...")
     
     print("\n🌬️ Fetching wind power data...")
-    wind_df = client.get_wind_power(start_date, end_date)
-    save_parquet(wind_df, "wind_power")
+    wind_df = client.get_wind_power(start_dt, end_dt)
+    save_parquet(wind_df, "wind")
     print(f"   ✓ {len(wind_df):,} records saved")
     
     print("\n⚡ Fetching mFRR activation data...")
-    mfrr_df = client.get_mfrr_activation(start_date, end_date)
-    save_parquet(mfrr_df, "mfrr_activation")
+    mfrr_df = client.get_mfrr_activation(start_dt, end_dt)
+    save_parquet(mfrr_df, "mfrr")
     print(f"   ✓ {len(mfrr_df):,} records saved")
     
     print("\n💰 Fetching imbalance price data...")
-    price_df = client.get_imbalance_price(start_date, end_date)
-    save_parquet(price_df, "imbalance_price")
+    price_df = client.get_imbalance_price(start_dt, end_dt)
+    save_parquet(price_df, "price")
     print(f"   ✓ {len(price_df):,} records saved")
     
     print("\n✅ Ingestion complete!")
@@ -75,7 +82,7 @@ def run_processing(use_cache: bool = True):
     return df
 
 
-def run_training(use_wandb: bool = True, **hyperparams):
+def run_training(use_wandb: bool = True, processed_df: Optional[pd.DataFrame] = None, **hyperparams):
     """Run the training pipeline."""
     from ingestion.processor import process_features
     from models.train import prepare_data, train_model, evaluate_model, save_model
@@ -104,11 +111,15 @@ def run_training(use_wandb: bool = True, **hyperparams):
     
     # Load processed data
     print("\n📥 Loading processed data...")
-    df = process_features(use_cache=True)
+    if processed_df is not None:
+        df = processed_df
+        print(f"  Using provided data: {len(df):,} rows")
+    else:
+        df = process_features(use_cache=True)
     
     # Prepare data
     print("🔧 Preparing features and target...")
-    X_train, X_test, y_train, y_test, feature_names = prepare_data(df, test_size=config["test_size"])
+    X_train, X_test, y_train, y_test, feature_names, scaler = prepare_data(df, test_size=config["test_size"])
     print(f"   Train: {X_train.shape[0]:,} samples, Test: {X_test.shape[0]:,} samples")
     
     # Train
@@ -196,10 +207,11 @@ Examples:
             print("\n⏭️  Skipping ingestion (using cached raw data)")
         
         # Step 2: Processing
+        processed_df = None
         if not args.skip_processing:
             # Force reprocessing if we just ingested new data
             use_cache = args.skip_ingestion
-            run_processing(use_cache=use_cache)
+            processed_df = run_processing(use_cache=use_cache)
         else:
             print("\n⏭️  Skipping processing (using cached features)")
         
@@ -207,6 +219,7 @@ Examples:
         if not args.skip_training:
             run_training(
                 use_wandb=not args.no_wandb,
+                processed_df=processed_df,
                 n_estimators=args.n_estimators,
                 max_depth=args.max_depth,
                 test_size=args.test_size
