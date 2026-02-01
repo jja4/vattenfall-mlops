@@ -54,23 +54,34 @@
     - [x] `scripts/verify_data.py`: Data verification report.
 
 ## 5. Serving Layer (FastAPI)
-- [ ] Implement `app/schemas.py`: Pydantic models for Input/Output.
-- [ ] Implement `app/main.py`:
-    - [ ] `lifespan` handler: Load `model.pkl` on startup.
-    - [ ] `GET /health`: Health check.
-    - [ ] `GET /predict`: 
-        - [ ] Fetch *latest* available data from Fingrid (past 1-2 hours).
-        - [ ] Process features matching training format.
-        - [ ] Return prediction.
+- [x] Implement `app/schemas.py`: Pydantic models for Input/Output.
+    - [x] `HealthResponse`: status, model_loaded, model_features, timestamp.
+    - [x] `PredictionResponse`: predicted_price, unit, prediction_for, data_timestamp, model_version.
+    - [x] `ErrorResponse`: error, detail, timestamp.
+- [x] Implement `app/main.py`:
+    - [x] `lifespan` handler: Load `model.pkl` on startup.
+    - [x] `GET /health`: Health check.
+    - [x] `GET /predict`: 
+        - [x] Fetch *latest* available data from Fingrid (past 30 hours).
+        - [x] 5-minute cache to avoid API rate limits.
+        - [x] Process features matching training format.
+        - [x] Apply scaler if present.
+        - [x] Return prediction with metadata.
+    - [x] `GET /model/info`: Model metadata and feature names.
+    - [x] `POST /predict/invalidate-cache`: Manual cache clear.
 
 ## 6. Dockerization
-- [ ] Create `Dockerfile`:
-    - [ ] Base python image (slim).
-    - [ ] Install `uv`.
-    - [ ] Copy code and model.
-    - [ ] Entrypoint: `uvicorn app.main:app`.
-- [ ] Create `.dockerignore`.
-- [ ] Test build and run locally.
+- [x] Create `Dockerfile`:
+    - [x] Base image: `ghcr.io/astral-sh/uv:python3.11-bookworm-slim` (uv pre-installed).
+    - [x] Layer caching: Copy `uv.lock` + `pyproject.toml` before app code.
+    - [x] Install deps: `uv sync --frozen --no-dev --no-install-project`.
+    - [x] Copy code and model.
+    - [x] Entrypoint: `uvicorn app.main:app --host 0.0.0.0 --port 8080`.
+- [x] Create `.dockerignore`: Excludes `.git`, `__pycache__`, `.venv`, `data/`, `tests/`, `scripts/`.
+- [x] Test build and run locally:
+    - [x] `docker build -t vattenfall-ml .`
+    - [x] `docker run -p 8080:8080 --env-file .env vattenfall-ml`
+    - [x] Verified `/health` and `/predict` endpoints work.
 
 ## 7. Cloud Deployment (GCP Cloud Run)
 - [ ] Setup GCP Project & Artifact Registry.

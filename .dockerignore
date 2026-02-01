@@ -1,0 +1,57 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv/
+ENV/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov/
+.tox
+
+# Build artifacts
+*.egg-info
+dist/
+build/
+
+# Data (raw data shouldn't be in container - fetched at runtime)
+data/raw/*.parquet
+data/processed/*.parquet
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Development files
+.env
+.env.local
+*.log
+
+# Scripts (not needed in production)
+scripts/
+
+# Tests (not needed in production)
+tests/
+
+# Jupyter notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# W&B
+wandb/
