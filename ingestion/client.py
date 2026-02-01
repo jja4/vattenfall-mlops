@@ -119,8 +119,8 @@ class FingridClient:
             return pd.DataFrame(columns=["timestamp", "value"])
         
         df = pd.DataFrame(all_data)
-        # Use startTime as the timestamp
-        df["timestamp"] = pd.to_datetime(df["startTime"])
+        # Use endTime as the timestamp (represents the completion of the 15-min interval)
+        df["timestamp"] = pd.to_datetime(df["endTime"])
         df = df[["timestamp", "value"]]
         df = df.sort_values("timestamp").reset_index(drop=True)
         
