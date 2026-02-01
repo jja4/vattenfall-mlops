@@ -84,6 +84,7 @@
         - [x] Return prediction with metadata.
     - [x] `GET /model/info`: Model metadata and feature names.
     - [x] `POST /predict/invalidate-cache`: Manual cache clear.
+    - [x] `GET /dashboard`: Interactive Plotly visualization (actual vs predicted, wind, mFRR).
 
 ## 6. Dockerization
 - [x] Create `Dockerfile`:

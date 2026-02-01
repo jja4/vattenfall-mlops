@@ -16,7 +16,7 @@ import logging
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from dotenv import load_dotenv
 
 from app.schemas import HealthResponse, PredictionResponse, ErrorResponse
@@ -317,3 +317,265 @@ async def model_info():
         "created_at": _model_created_at,
         "model_path": get_model_path()
     }
+
+
+@app.get("/dashboard", response_class=HTMLResponse, tags=["Visualization"])
+async def dashboard():
+    """
+    Interactive dashboard showing recent data and predictions.
+    Returns an HTML page with Plotly charts.
+    
+    Note: Predictions are made for T+15min using features at time T.
+    We align predictions with actual future values for proper comparison.
+    """
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+    
+    try:
+        # Fetch latest data
+        raw_data = _fetch_latest_data()
+        
+        if raw_data.empty:
+            return HTMLResponse("<h1>No data available</h1>", status_code=503)
+        
+        # Apply feature engineering to get features for ALL rows (not just latest)
+        df = raw_data.copy()
+        df = create_lag_features(df)
+        df = create_rolling_features(df)
+        df = create_temporal_features(df)
+        
+        # Drop NaN rows from lag/rolling operations
+        df = df.dropna().reset_index(drop=True)
+        
+        if df.empty or len(df) < 10:
+            return HTMLResponse("<h1>Insufficient data for visualization</h1>", status_code=503)
+        
+        # Get predictions for all available rows
+        # Prediction at row i is for timestamp[i] + 15min = timestamp[i+1]
+        X = df[_feature_names].values
+        if _scaler:
+            X = _scaler.transform(X)
+        predictions = _model.predict(X)
+        
+        # ALIGNMENT FIX: Predictions made at T are for T+15min
+        # So prediction[i] should compare with actual[i+1]
+        # We shift predictions back by 1 to align with actuals
+        # Or equivalently: for time T, we show prediction made at T-15min
+        
+        # Use timestamps as the common x-axis (excluding first point for alignment)
+        # Convert to Python lists to avoid Plotly binary encoding issues
+        aligned_timestamps = df['timestamp'].values[1:].tolist()  # T+15min timestamps
+        aligned_actuals = df['imbalance_price'].values[1:].tolist()  # Actual at T+15min
+        aligned_predictions = predictions[:-1].tolist()  # Prediction made at T for T+15min
+        
+        # Wind and mFRR also aligned to same timestamps
+        aligned_wind = df['wind_power_mw'].values[1:].tolist()
+        aligned_mfrr = df['mfrr_price'].values[1:].tolist()
+        
+        # Create subplots with shared x-axis for alignment
+        fig = make_subplots(
+            rows=3, cols=1,
+            subplot_titles=(
+                '<b>Imbalance Price: Actual vs Model Prediction</b>',
+                '<b>Wind Power Generation</b>',
+                '<b>mFRR Activation Price</b>'
+            ),
+            vertical_spacing=0.12,
+            row_heights=[0.5, 0.25, 0.25],
+            shared_xaxes=True  # Share x-axis for time alignment
+        )
+        
+        # Plot 1: Actual vs Predicted (properly aligned)
+        fig.add_trace(
+            go.Scatter(
+                x=aligned_timestamps, 
+                y=aligned_actuals, 
+                name='Actual Price',
+                line=dict(color='#2E86AB', width=2),
+                hovertemplate='Actual: %{y:.2f} EUR/MWh<extra></extra>'
+            ),
+            row=1, col=1
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=aligned_timestamps, 
+                y=aligned_predictions, 
+                name='Predicted Price (15min ahead)',
+                line=dict(color='#E94F37', width=2, dash='dash'),
+                hovertemplate='Predicted: %{y:.2f} EUR/MWh<extra></extra>'
+            ),
+            row=1, col=1
+        )
+        
+        # Plot 2: Wind Power
+        fig.add_trace(
+            go.Scatter(
+                x=aligned_timestamps, 
+                y=aligned_wind, 
+                name='Wind Power (MW)',
+                line=dict(color='#44AF69', width=1.5),
+                fill='tozeroy', 
+                fillcolor='rgba(68, 175, 105, 0.2)',
+                hovertemplate='Wind: %{y:.0f} MW<extra></extra>'
+            ),
+            row=2, col=1
+        )
+        
+        # Plot 3: mFRR Price
+        fig.add_trace(
+            go.Scatter(
+                x=aligned_timestamps, 
+                y=aligned_mfrr, 
+                name='mFRR Price (EUR/MWh)',
+                line=dict(color='#F18F01', width=1.5),
+                hovertemplate='mFRR: %{y:.2f} EUR/MWh<extra></extra>'
+            ),
+            row=3, col=1
+        )
+        
+        # Calculate metrics on aligned data (convert back to numpy for calculations)
+        actuals_arr = np.array(aligned_actuals)
+        preds_arr = np.array(aligned_predictions)
+        mae = np.mean(np.abs(actuals_arr - preds_arr))
+        rmse = np.sqrt(np.mean((actuals_arr - preds_arr) ** 2))
+        
+        # Correlation between prediction and actual
+        corr = np.corrcoef(actuals_arr, preds_arr)[0, 1]
+        
+        # Update layout with better legend and spacing
+        fig.update_layout(
+            title=dict(
+                text=f'<b>Finland Electricity Imbalance Price Dashboard</b><br>'
+                     f'<span style="font-size:14px">MAE: {mae:.2f} EUR/MWh | '
+                     f'RMSE: {rmse:.2f} EUR/MWh | '
+                     f'Correlation: {corr:.3f} | '
+                     f'Data Points: {len(aligned_predictions)}</span>',
+                x=0.5,
+                xanchor='center',
+                font=dict(size=18)
+            ),
+            height=900,
+            showlegend=True,
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=-0.25,  # Move legend further down to avoid overlap with x-axis title
+                xanchor='center',
+                x=0.5,
+                bgcolor='rgba(255,255,255,0.8)',
+                bordercolor='rgba(0,0,0,0.1)',
+                borderwidth=1,
+                font=dict(size=12),
+                itemsizing='constant',
+                itemwidth=40
+            ),
+            template='plotly_white',
+            hovermode='x unified',
+            margin=dict(b=120, l=80, r=50, t=120)  # More margins for labels
+        )
+        
+        # Update axes labels - show time on all charts
+        fig.update_yaxes(title_text='Price (EUR/MWh)', row=1, col=1)
+        fig.update_xaxes(title_text='Time (UTC)', showticklabels=True, row=1, col=1)
+        
+        fig.update_yaxes(title_text='Power (MW)', row=2, col=1)
+        fig.update_xaxes(title_text='Time (UTC)', showticklabels=True, row=2, col=1)
+        
+        fig.update_yaxes(title_text='Price (EUR/MWh)', row=3, col=1)
+        fig.update_xaxes(title_text='Time (UTC)', row=3, col=1)
+        
+        # Calculate data lag
+        latest_data_time = df['timestamp'].max()
+        data_lag_minutes = (datetime.now(timezone.utc) - latest_data_time.to_pydatetime().replace(tzinfo=timezone.utc)).total_seconds() / 60
+        
+        # Generate HTML
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Vattenfall MLOps Dashboard</title>
+            <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+            <style>
+                body {{ 
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    margin: 0;
+                    padding: 20px;
+                    background-color: #f5f5f5;
+                }}
+                .container {{ 
+                    max-width: 1400px; 
+                    margin: 0 auto;
+                    background: white;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    padding: 20px;
+                }}
+                .header {{ 
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 20px;
+                    padding-bottom: 15px;
+                    border-bottom: 1px solid #eee;
+                }}
+                .refresh-btn {{
+                    background: #2E86AB;
+                    color: white;
+                    border: none;
+                    padding: 10px 20px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 14px;
+                }}
+                .refresh-btn:hover {{ background: #1d5d7a; }}
+                .timestamp {{ color: #666; font-size: 14px; }}
+                .info {{ 
+                    background: #f8f9fa; 
+                    padding: 10px 15px; 
+                    border-radius: 5px; 
+                    margin-bottom: 15px;
+                    font-size: 13px;
+                    color: #555;
+                }}
+                .warning {{
+                    background: #fff3cd;
+                    border: 1px solid #ffc107;
+                    color: #856404;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <div>
+                        <h1 style="margin: 0;">🇫🇮 Finland Imbalance Price Prediction</h1>
+                        <p class="timestamp">Last updated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+                    </div>
+                    <button class="refresh-btn" onclick="location.reload()">↻ Refresh</button>
+                </div>
+                <div class="info">
+                    ℹ️ Predictions are made 15 minutes ahead. The model uses current wind power, mFRR prices, 
+                    and historical lags to predict the next interval's imbalance price.
+                </div>
+                <div class="info warning">
+                    ⏱️ <strong>Data Lag:</strong> Latest data point is from {latest_data_time.strftime('%Y-%m-%d %H:%M UTC')} 
+                    (~{int(data_lag_minutes)} min / {data_lag_minutes/60:.1f} hours behind current time). 
+                    This is normal — Fingrid API publishes data with ~1-2 hour delay.
+                </div>
+                <div id="chart"></div>
+            </div>
+            <script>
+                var plotlyData = {fig.to_json()};
+                Plotly.newPlot('chart', plotlyData.data, plotlyData.layout, {{responsive: true}});
+            </script>
+        </body>
+        </html>
+        """
+        
+        return HTMLResponse(content=html_content)
+        
+    except Exception as e:
+        logger.error(f"Dashboard error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return HTMLResponse(f"<h1>Error</h1><p>{str(e)}</p>", status_code=500)
