@@ -5,6 +5,11 @@ import time
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from typing import Optional
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 
 class FingridClient:
     BASE_URL = "https://data.fingrid.fi/api/datasets"
@@ -14,8 +19,16 @@ class FingridClient:
     MFRR_ACTIVATION_ID = 342
     IMBALANCE_PRICE_ID = 319
     
-    def __init__(self, api_key: str):
-        self.api_key = api_key
+    def __init__(self, api_key: str = None):
+        """
+        Initialize Fingrid API client.
+        
+        Args:
+            api_key: Fingrid API key. If not provided, reads from FINGRID_API_KEY env var.
+        """
+        self.api_key = api_key or os.getenv("FINGRID_API_KEY")
+        if not self.api_key:
+            raise ValueError("API key required. Set FINGRID_API_KEY env var or pass api_key argument.")
         self.headers = {"x-api-key": self.api_key}
 
     def get_dataset(self, dataset_id: int, start_time: datetime, end_time: datetime) -> pd.DataFrame:
