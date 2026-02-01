@@ -99,7 +99,13 @@
     - [x] `docker run -p 8080:8080 --env-file .env vattenfall-ml`
     - [x] Verified `/health` and `/predict` endpoints work.
 
-## 7. Cloud Deployment (GCP Cloud Run)
-- [ ] Setup GCP Project & Artifact Registry.
-- [ ] Build and Push Image:
-- [ ] Deploy to Cloud Run:
+## 7. Cloud Deployment (Azure Container Apps)
+- [x] Setup Azure Account and CLI.
+- [x] Use Terraform for Infrastructure as Code.
+- [x] Setup Azure Container Registry.
+- [x] Build and Push Image.
+- [x] Deploy to Azure Container Apps.
+- [x] Verified live endpoints work:
+    - Health: https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/health
+    - Predict: https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/predict
+    - Dashboard: https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/dashboard

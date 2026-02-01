@@ -1,0 +1,23 @@
+# Terraform example configuration
+# Copy this file to terraform.tfvars and fill in your values
+
+# Project settings
+project_name        = "vattenfall-mlops"
+resource_group_name = "rg-vattenfall-mlops"
+location            = "northeurope"
+
+# ACR name must be globally unique and alphanumeric only
+acr_name = "acrvattenfall"
+
+# Container settings
+image_name       = "vattenfall-ml"
+image_tag        = "latest"
+container_cpu    = 0.5
+container_memory = "1Gi"
+
+# Scaling (min=0 scales to zero when idle for cost savings)
+min_replicas = 0
+max_replicas = 3
+
+# Secrets - set via environment variable TF_VAR_fingrid_api_key
+# fingrid_api_key = "your-api-key-here"
