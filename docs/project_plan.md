@@ -30,6 +30,15 @@
     - [x] `process_features(df, use_cache)`: Main pipeline with processed data caching.
     - [x] Constants: `PERIODS_PER_HOUR`, `LAG_1H/2H/3H`, `ROLLING_1H/3H`.
     - [x] Required column sets: `REQUIRED_RAW_COLUMNS`, `REQUIRED_MERGED_COLUMNS`.
+- [x] Create `notebooks/eda.ipynb`: Exploratory data analysis.
+    - [x] Data quality overview and missing values.
+    - [x] Target variable distribution (histogram, boxplot, Q-Q plot).
+    - [x] Time series visualization (price, wind, mFRR).
+    - [x] Temporal patterns (hourly, daily, monthly).
+    - [x] Correlation analysis and scatter plots.
+    - [x] Feature engineering analysis.
+    - [x] Price volatility analysis.
+- [x] Create `reports/` directory for saved plot images.
 
 ## 4. Modeling Layer
 - [x] Create `models/train.py`:
@@ -41,6 +50,12 @@
     - [x] Integration with Weights & Biases (`wandb.init`, `wandb.log`).
     - [x] `save_model(model, feature_names, path)`: Save model with metadata.
     - [x] `load_model(path)`: Load model and feature names (handles legacy format).
+- [x] Create `notebooks/training_results.ipynb`: Model evaluation.
+    - [x] Actual vs predicted scatter plots.
+    - [x] Residual analysis.
+    - [x] Feature importance.
+    - [x] Prediction time series.
+    - [x] Error analysis by price range.
 - [x] Create `run_pipeline.py`: Single entry point for ingestion → processing → training.
     - [x] CLI flags: `--skip-ingestion`, `--skip-processing`, `--skip-training`, `--no-wandb`.
     - [x] Date range args: `--start`, `--end`.
