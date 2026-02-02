@@ -1,29 +1,29 @@
-# Use a Python image with uv pre-installed
+# Optimized production image
 FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim
 
-# Set the working directory to /app
 WORKDIR /app
 
-# Enable bytecode compilation
+# Enable bytecode compilation for faster startup
 ENV UV_COMPILE_BYTECODE=1
 
-# Copy the lockfile and pyproject.toml first to leverage Docker cache
+# Copy dependency files first for layer caching
 COPY uv.lock pyproject.toml /app/
 
-# Install dependencies using uv
-# --no-dev: Exclude development dependencies
-# --frozen: Use the exact versions from uv.lock
-# --no-install-project: We only want dependencies for now, not the project itself
+# Install ONLY production dependencies (no training, notebooks, or dev deps)
 RUN uv sync --frozen --no-dev --no-install-project
 
-# Copy the rest of the application code
-COPY . /app
+# Copy only what's needed for serving (not notebooks, training scripts, etc.)
+COPY app/ /app/app/
+COPY ingestion/ /app/ingestion/
+COPY models/__init__.py /app/models/__init__.py
+COPY models/model.pkl /app/models/model.pkl
 
-# Place the virtualenv in the path
+# Set environment
 ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
 
-# Expose the port
+# Expose port
 EXPOSE 8080
 
-# Command to run the application
+# Run with optimized settings
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

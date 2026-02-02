@@ -5,27 +5,44 @@ description = "Real-time imbalance price prediction for Finland"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
+    # Core serving dependencies (minimal for production)
     "fastapi",
     "uvicorn",
     "requests",
     "pandas",
     "scikit-learn",
     "python-dotenv",
-    "wandb",
-    "pyarrow", # For parquet
-    "fastparquet",
+    "pyarrow",  # For parquet read/write
     "python-dateutil>=2.9.0.post0",
-    "plotly>=6.5.2",
+    "plotly>=6.5.2",  # For dashboard visualization
+]
+
+[dependency-groups]
+# Training dependencies (for model training, not needed in production)
+training = [
+    "wandb",
+]
+
+# Notebook/exploration dependencies (not needed in production)
+notebooks = [
     "ipykernel>=6.31.0",
     "jupyter>=1.1.1",
     "matplotlib>=3.9.4",
     "seaborn>=0.13.2",
     "scipy>=1.13.1",
+    "fastparquet",  # Alternative parquet engine for notebooks
 ]
 
-[dependency-groups]
+# Development tools
 dev = [
     "pytest",
     "ruff",
-    "black"
+    "black",
+]
+
+# All dependencies for local development
+all = [
+    {include-group = "training"},
+    {include-group = "notebooks"},
+    {include-group = "dev"},
 ]
