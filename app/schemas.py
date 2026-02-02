@@ -11,6 +11,7 @@ class HealthResponse(BaseModel):
     status: str = "healthy"
     model_loaded: bool
     model_features: int
+    model_version: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -48,6 +49,15 @@ class FeatureInput(BaseModel):
 class BatchPredictionRequest(BaseModel):
     """Request for batch predictions with custom features."""
     features: List[FeatureInput]
+
+
+class ModelReloadResponse(BaseModel):
+    """Response for model reload endpoint."""
+    success: bool
+    message: str
+    old_version: Optional[str] = None
+    new_version: Optional[str] = None
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
 class ErrorResponse(BaseModel):

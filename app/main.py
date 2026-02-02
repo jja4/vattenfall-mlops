@@ -4,10 +4,18 @@ FastAPI application for serving imbalance price predictions.
 The API fetches the latest data from Fingrid, processes features matching
 the training format, and returns predictions using the trained model.
 
+Features:
+- Real-time predictions using latest Fingrid data
+- Model hot-reload from W&B Model Registry
+- Background model version checking
+- Zero-downtime model updates
+
 Usage:
     uvicorn app.main:app --reload --port 8000
 """
 import os
+import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -15,12 +23,12 @@ import logging
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse, HTMLResponse
 from dotenv import load_dotenv
 
-from app.schemas import HealthResponse, PredictionResponse, ErrorResponse
-from models import load_model
+from app.schemas import HealthResponse, PredictionResponse, ErrorResponse, ModelReloadResponse
+from pipeline.train import load_model, load_model_from_wandb, get_production_model_version
 from ingestion.client import FingridClient
 from ingestion.processor import (
     resample_to_15min,
@@ -43,6 +51,14 @@ _model = None
 _feature_names = None
 _scaler = None
 _model_created_at = None
+_model_version = None  # W&B version (e.g., 'v3')
+
+# Thread lock for safe model swapping
+_model_lock = threading.Lock()
+
+# Background reload configuration
+MODEL_CHECK_INTERVAL_SECONDS = 300  # Check W&B every 5 minutes
+USE_WANDB_REGISTRY = os.getenv("USE_WANDB_REGISTRY", "false").lower() == "true"
 
 # Cache for Fingrid data (avoid hammering the API)
 _data_cache = {
@@ -57,44 +73,120 @@ def get_model_path() -> str:
     return os.getenv("MODEL_PATH", "models/model.pkl")
 
 
+def _load_model_from_source():
+    """
+    Load model from configured source (W&B Registry or local file).
+    
+    Returns:
+        Tuple of (model, feature_names, scaler, version, created_at)
+    """
+    if USE_WANDB_REGISTRY:
+        logger.info("Loading model from W&B Model Registry...")
+        model, feature_names, scaler, version, created_at = load_model_from_wandb("production")
+        return model, feature_names, scaler, version, created_at
+    else:
+        logger.info("Loading model from local file...")
+        model_path = get_model_path()
+        model, feature_names, scaler = load_model(model_path)
+        
+        # Try to get metadata from local file
+        import pickle
+        version = None
+        created_at = None
+        with open(model_path, "rb") as f:
+            artifact = pickle.load(f)
+            if isinstance(artifact, dict):
+                created_at = artifact.get("created_at")
+                version = artifact.get("version", "local")
+        
+        return model, feature_names, scaler, version, created_at
+
+
+async def _background_model_checker():
+    """
+    Background task that periodically checks for model updates in W&B.
+    
+    Runs every MODEL_CHECK_INTERVAL_SECONDS and reloads model if
+    production version has changed.
+    """
+    global _model, _feature_names, _scaler, _model_version, _model_created_at
+    
+    if not USE_WANDB_REGISTRY:
+        logger.info("W&B registry disabled, background checker not starting")
+        return
+    
+    logger.info(f"Starting background model checker (interval: {MODEL_CHECK_INTERVAL_SECONDS}s)")
+    
+    while True:
+        await asyncio.sleep(MODEL_CHECK_INTERVAL_SECONDS)
+        
+        try:
+            # Check current production version
+            current_version = get_production_model_version()
+            
+            if current_version and current_version != _model_version:
+                logger.info(f"New model version detected: {current_version} (was: {_model_version})")
+                
+                # Load new model
+                new_model, new_features, new_scaler, version, created_at = load_model_from_wandb("production")
+                
+                # Atomic swap with lock
+                with _model_lock:
+                    _model = new_model
+                    _feature_names = new_features
+                    _scaler = new_scaler
+                    _model_version = version
+                    _model_created_at = created_at
+                
+                logger.info(f"Model hot-reloaded to version {version}")
+            else:
+                logger.debug(f"Model version unchanged: {_model_version}")
+                
+        except Exception as e:
+            logger.error(f"Background model check failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Lifespan context manager for startup/shutdown events.
-    Loads model on startup, cleanup on shutdown.
+    Loads model on startup, starts background checker, cleanup on shutdown.
     """
-    global _model, _feature_names, _scaler, _model_created_at
+    global _model, _feature_names, _scaler, _model_created_at, _model_version
     
-    model_path = get_model_path()
-    logger.info(f"Loading model from {model_path}...")
+    logger.info("Starting Vattenfall ML Service...")
     
     try:
-        _model, _feature_names, _scaler = load_model(model_path)
-        
-        # Try to get model creation time from artifact
-        import pickle
-        with open(model_path, "rb") as f:
-            artifact = pickle.load(f)
-            if isinstance(artifact, dict):
-                _model_created_at = artifact.get("created_at")
+        # Load initial model
+        _model, _feature_names, _scaler, _model_version, _model_created_at = _load_model_from_source()
         
         logger.info(f"✓ Model loaded successfully")
+        logger.info(f"  Version: {_model_version or 'unknown'}")
         logger.info(f"  Features: {len(_feature_names) if _feature_names else 'unknown'}")
         logger.info(f"  Scaler: {'yes' if _scaler else 'no'}")
         logger.info(f"  Created: {_model_created_at or 'unknown'}")
         
-    except FileNotFoundError:
-        logger.error(f"Model file not found: {model_path}")
-        logger.error("Please train a model first: python -m models.train")
-        raise RuntimeError(f"Model not found: {model_path}")
+    except FileNotFoundError as e:
+        logger.error(f"Model file not found: {e}")
+        logger.error("Please train a model first: python -m pipeline.train")
+        raise RuntimeError(f"Model not found: {e}")
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
         raise
+    
+    # Start background model checker
+    background_task = asyncio.create_task(_background_model_checker())
     
     yield  # Application runs here
     
     # Cleanup on shutdown
     logger.info("Shutting down, cleaning up...")
+    background_task.cancel()
+    try:
+        await background_task
+    except asyncio.CancelledError:
+        pass
+    
     _model = None
     _feature_names = None
     _scaler = None
@@ -125,8 +217,51 @@ async def health_check():
         status="healthy" if _model is not None else "unhealthy",
         model_loaded=_model is not None,
         model_features=len(_feature_names) if _feature_names else 0,
+        model_version=_model_version,
         timestamp=datetime.now(timezone.utc)
     )
+
+
+@app.post("/model/reload", response_model=ModelReloadResponse, tags=["Admin"])
+async def reload_model():
+    """
+    Manually trigger model reload from W&B Model Registry.
+    
+    This endpoint forces an immediate reload of the production model
+    from W&B, useful for testing or forcing updates.
+    """
+    global _model, _feature_names, _scaler, _model_version, _model_created_at
+    
+    if not USE_WANDB_REGISTRY:
+        raise HTTPException(
+            status_code=400,
+            detail="W&B registry not enabled. Set USE_WANDB_REGISTRY=true"
+        )
+    
+    old_version = _model_version
+    
+    try:
+        new_model, new_features, new_scaler, version, created_at = load_model_from_wandb("production")
+        
+        with _model_lock:
+            _model = new_model
+            _feature_names = new_features
+            _scaler = new_scaler
+            _model_version = version
+            _model_created_at = created_at
+        
+        logger.info(f"Model manually reloaded: {old_version} -> {version}")
+        
+        return ModelReloadResponse(
+            success=True,
+            message=f"Model reloaded successfully",
+            old_version=old_version,
+            new_version=version,
+        )
+        
+    except Exception as e:
+        logger.error(f"Manual model reload failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def _is_cache_valid() -> bool:
@@ -319,11 +454,12 @@ async def model_info():
     
     return {
         "model_type": type(_model).__name__,
+        "model_version": _model_version,  # W&B version (e.g., 'v1') or 'local'
+        "model_source": "wandb_registry" if USE_WANDB_REGISTRY else "local_file",
         "n_features": len(_feature_names) if _feature_names else 0,
         "feature_names": _feature_names,
         "has_scaler": _scaler is not None,
         "created_at": _model_created_at,
-        "model_path": get_model_path()
     }
 
 
