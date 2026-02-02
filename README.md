@@ -13,7 +13,8 @@ Real-time electricity imbalance price prediction service for Finland, powered by
 | [`/predict`](https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/predict) | Real-time price prediction |
 | [`/dashboard`](https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/dashboard) | Interactive data visualization |
 
-
+[Interactive Dashboard](https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/dashboard)
+![Dashboard Screenshot](docs/images/dashboard.png)
 ---
 
 ## 🏗️ Architecture
@@ -123,16 +124,6 @@ curl https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainera
   "model_version": "2026-02-01T14:46:00.629991"
 }
 ```
-
-### Interactive Dashboard
-
-Open in browser: https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/dashboard
-
-Features:
-- Real-time price chart (last 5 hours)
-- Wind power production overlay
-- mFRR activation events
-- Hourly pattern analysis
 
 ---
 
@@ -277,14 +268,20 @@ curl http://localhost:8080/health
   - Hour-of-day cyclical encoding
   - Day-of-week indicators
 - **Target**: Imbalance price (EUR/MWh)
-- **Training Data**: 1 year of hourly Fingrid data (2025)
+- **Training Data**: 1 year of 15-minute interval Fingrid data (2025)
 - **Experiment Tracking**: Weights & Biases
+
+[Weights & Biases Project](https://wandb.ai/joelaftreth-independent/vattenfall-imbalance-price/)
+
+![Weights & Biases](docs/images/wandb.png)
 
 ---
 
 ## 📚 Documentation
 
 - [Project Plan](docs/project_plan.md) - Development roadmap and completed steps
+- [API Docs](https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/docs) - FastAPI interactive documentation
+![FastAPI Screenshot](docs/images/api-docs.png)
 
 
 

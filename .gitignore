@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .env
+.env.azure
 .venv/
 data/
 models/*.pkl
