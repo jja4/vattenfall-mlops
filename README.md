@@ -112,7 +112,7 @@ Real-time electricity imbalance price prediction service for Finland, featuring 
 │                      └─────────────────┘                                │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
-<b>Weights & Biases Model Registry</b>
+[Weights & Biases Model Registry](https://wandb.ai/joelaftreth-independent/vattenfall-imbalance-price/)
 
 ![W&B Registry](docs/screenshots/wandb.png)
 
