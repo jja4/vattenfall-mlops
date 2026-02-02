@@ -109,3 +109,27 @@
     - Health: https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/health
     - Predict: https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/predict
     - Dashboard: https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/dashboard
+
+## 8. dlt Ingestion to Azure Storage
+- [x] Implement DLT ingestion using `ingestion/dlt_source.py`
+- [x] Configure Azure Blob Storage as destination.
+
+## 9. Configure Weights & Biases as model registry
+- [x] Setup W&B project and API key.
+- [x] Log experiments and models during training.
+- [x] Implement champion/challenger pattern.
+
+## 10. Create Pipeline Workflow
+- [x] GitHub Actions workflows for:
+    - [x] Ingestion: Hourly data fetch and store raw Parquet.
+    - [x] Feature Generation: Daily processing and save processed Parquet.
+    - [x] Model Training: Daily training after feature generation, log to W&B.
+    - [x] Model Promotion: Manual trigger to promote best model to production.
+
+## 11. CI/CD with GitHub Actions
+- [x] Setup workflows in `.github/workflows/`:
+    - [x] `ingest.yml`: Hourly ingestion workflow.
+    - [x] `features.yml`: Daily feature processing workflow.
+    - [x] `train.yml`: Daily model training workflow.
+    - [x] `promote.yml`: Manual model promotion workflow.
+    - [x] `deploy.yml`: Deploy Docker image to Azure on main branch push.
