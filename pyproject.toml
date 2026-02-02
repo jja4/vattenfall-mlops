@@ -3,7 +3,7 @@ name = "vattenfall"
 version = "0.1.0"
 description = "Real-time imbalance price prediction for Finland"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 dependencies = [
     # Core serving dependencies (minimal for production)
     "fastapi",
@@ -15,12 +15,14 @@ dependencies = [
     "pyarrow",  # For parquet read/write
     "python-dateutil>=2.9.0.post0",
     "plotly>=6.5.2",  # For dashboard visualization
+    "wandb",  # For model registry (needed at runtime for hot-reload)
 ]
 
 [dependency-groups]
-# Training dependencies (for model training, not needed in production)
+# Training/pipeline dependencies (for data ingestion and model training)
 training = [
-    "wandb",
+    "dlt[filesystem]>=1.0.0",  # Data load tool for incremental ingestion
+    "adlfs>=2024.2.0",  # Azure Data Lake filesystem for pandas
 ]
 
 # Notebook/exploration dependencies (not needed in production)
