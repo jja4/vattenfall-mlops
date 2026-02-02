@@ -1,5 +1,21 @@
+"""
+Feature engineering transformations for imbalance price prediction.
+
+This module contains PURE TRANSFORMATION FUNCTIONS only - no I/O.
+All data loading/saving is handled by:
+- pipeline/features.py (batch processing from Azure Blob)
+- app/main.py (real-time processing from Fingrid API)
+
+Functions:
+- resample_to_15min(): Resample time-series to 15-minute intervals
+- merge_datasets(): Merge wind, mFRR, and price data
+- merge_datasets_realtime(): Merge with lookback data for real-time predictions
+- create_lag_features(): Create lagged features
+- create_rolling_features(): Create rolling statistics
+- create_temporal_features(): Create time-based features
+"""
 import pandas as pd
-from .storage import load_parquet, save_processed, load_processed
+import numpy as np
 
 # =============================================================================
 # Constants for time intervals (15-minute resolution)
@@ -258,116 +274,3 @@ def create_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     df["is_evening_peak"] = ((df["hour_of_day"] >= 17) & (df["hour_of_day"] <= 20)).astype(int)
     
     return df
-
-
-def process_features(df: pd.DataFrame = None, use_cache: bool = True) -> pd.DataFrame:
-    """
-    Complete feature engineering pipeline.
-    
-    If df is None, loads raw data from storage, otherwise processes provided DataFrame.
-    Uses cache by default to avoid reprocessing.
-    
-    Steps:
-    1. Check cache (if use_cache=True)
-    2. Load raw data
-    3. Validate data
-    4. Resample to 15-minute intervals
-    5. Merge datasets
-    6. Create lag features
-    7. Create rolling features
-    8. Create temporal features
-    9. Drop rows with NaN (from lag/rolling operations)
-    10. Cache result
-    
-    Args:
-        df: Optional pre-loaded DataFrame to process
-        use_cache: If True, use cached processed data if available
-    
-    Returns:
-        DataFrame ready for model training
-    """
-    # Check cache first
-    if df is None and use_cache:
-        cached = load_processed("features")
-        if cached is not None:
-            print("📦 Using cached processed data")
-            print(f"  Shape: {cached.shape}")
-            return cached
-    
-    if df is None:
-        print("📥 Loading raw data...")
-        wind_df = load_parquet("wind")
-        mfrr_df = load_parquet("mfrr")
-        price_df = load_parquet("price")
-        
-        if wind_df is None or mfrr_df is None or price_df is None:
-            raise ValueError("Missing raw data. Run ingestion pipeline first.")
-        
-        # Validate raw data
-        validate_dataframe(wind_df, REQUIRED_RAW_COLUMNS["wind"], "Wind data")
-        validate_dataframe(mfrr_df, REQUIRED_RAW_COLUMNS["mfrr"], "mFRR data")
-        validate_dataframe(price_df, REQUIRED_RAW_COLUMNS["price"], "Price data")
-        
-        print(f"  Wind: {len(wind_df):,} rows ✓")
-        print(f"  mFRR: {len(mfrr_df):,} rows ✓")
-        print(f"  Price: {len(price_df):,} rows ✓")
-        
-        # Resample to 15-minute intervals
-        print("\n⏱️  Resampling to 15-minute intervals...")
-        wind_df = resample_to_15min(wind_df, "wind_power_mw", method="mean")
-        mfrr_df = resample_to_15min(mfrr_df, "mfrr_price", method="ffill")
-        # Price is already at 15-min, but ensure consistency
-        price_df = resample_to_15min(price_df, "imbalance_price", method="ffill")
-        
-        print(f"  Wind: {len(wind_df):,} rows")
-        print(f"  mFRR: {len(mfrr_df):,} rows")
-        print(f"  Price: {len(price_df):,} rows")
-        
-        # Merge datasets
-        print("\n🔗 Merging datasets...")
-        df = merge_datasets(wind_df, mfrr_df, price_df)
-        print(f"  Merged: {len(df):,} rows")
-        
-        # Validate merged data
-        validate_dataframe(df, REQUIRED_MERGED_COLUMNS, "Merged data")
-    
-    # Feature engineering
-    print("\n🔧 Creating features...")
-    df = create_lag_features(df)
-    print("  ✓ Lag features (1h, 2h, 3h, 6h, 12h, 24h + momentum)")
-    
-    df = create_rolling_features(df)
-    print("  ✓ Rolling statistics (mean, std, min/max)")
-    
-    df = create_temporal_features(df)
-    print("  ✓ Temporal features (hour, day, month + cyclical encoding)")
-    
-    # Drop rows with NaN from lag/rolling operations
-    initial_len = len(df)
-    df = df.dropna().reset_index(drop=True)
-    print(f"\n🧹 Dropped {initial_len - len(df):,} rows with NaN (from lag/rolling)")
-    print(f"  Final dataset: {len(df):,} rows with {len(df.columns)} features")
-    
-    # Cache the processed data
-    if use_cache:
-        save_processed(df, "features")
-    
-    return df
-
-
-if __name__ == "__main__":
-    # Test the processor
-    print("="*60)
-    print("Testing Feature Processing Pipeline")
-    print("="*60)
-    
-    processed_df = process_features()
-    
-    print(f"\n📊 Processed Data Summary:")
-    print(f"  Shape: {processed_df.shape}")
-    print(f"\n  Columns: {list(processed_df.columns)}")
-    print(f"\n  Time range: {processed_df['timestamp'].min()} to {processed_df['timestamp'].max()}")
-    print(f"\n  Sample rows:")
-    print(processed_df.head())
-    
-    print(f"\n✅ Processing complete!")
