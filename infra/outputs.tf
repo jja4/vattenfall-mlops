@@ -45,3 +45,21 @@ output "key_vault_uri" {
   description = "URI of the Azure Key Vault"
   value       = azurerm_key_vault.main.vault_uri
 }
+
+# -----------------------------------------------------------------------------
+# Storage Outputs
+# -----------------------------------------------------------------------------
+output "storage_account_name" {
+  description = "Name of the storage account for MLOps data"
+  value       = azurerm_storage_account.mlops_data.name
+}
+
+output "storage_account_primary_endpoint" {
+  description = "Primary blob endpoint for the storage account"
+  value       = azurerm_storage_account.mlops_data.primary_blob_endpoint
+}
+
+output "storage_connection_string_secret_name" {
+  description = "Name of the Key Vault secret containing the storage connection string"
+  value       = azurerm_key_vault_secret.storage_connection_string.name
+}

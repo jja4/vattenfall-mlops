@@ -114,3 +114,16 @@ variable "fingrid_api_key" {
   type        = string
   sensitive   = true
 }
+
+variable "wandb_api_key" {
+  description = "Weights & Biases API key for model registry (required for production)"
+  type        = string
+  sensitive   = true
+  # No default - must be provided via TF_VAR_wandb_api_key or terraform.tfvars
+}
+
+variable "use_wandb_registry" {
+  description = "Enable model hot-reload from W&B Model Registry"
+  type        = bool
+  default     = true  # Production default: load models from W&B registry
+}

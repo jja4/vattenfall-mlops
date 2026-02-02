@@ -125,6 +125,16 @@ resource "azurerm_container_app" "ml_service" {
     identity            = azurerm_user_assigned_identity.container_app.id
   }
 
+  # W&B API key (optional, for model hot-reload)
+  dynamic "secret" {
+    for_each = var.wandb_api_key != "" ? [1] : []
+    content {
+      name                = "wandb-api-key"
+      key_vault_secret_id = azurerm_key_vault_secret.wandb_api_key[0].versionless_id
+      identity            = azurerm_user_assigned_identity.container_app.id
+    }
+  }
+
   # Container template
   template {
     min_replicas = var.min_replicas
@@ -145,6 +155,20 @@ resource "azurerm_container_app" "ml_service" {
       env {
         name  = "PORT"
         value = "8080"
+      }
+
+      # W&B configuration for model hot-reload
+      env {
+        name  = "USE_WANDB_REGISTRY"
+        value = tostring(var.use_wandb_registry)
+      }
+
+      dynamic "env" {
+        for_each = var.wandb_api_key != "" ? [1] : []
+        content {
+          name        = "WANDB_API_KEY"
+          secret_name = "wandb-api-key"
+        }
       }
 
       # Liveness probe

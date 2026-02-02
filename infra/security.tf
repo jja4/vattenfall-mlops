@@ -64,6 +64,12 @@ resource "azurerm_key_vault_access_policy" "deployer" {
     "Purge",
     "Recover"
   ]
+  
+  # When object_id changes (e.g., switching from user to SP),
+  # create new policy before destroying old one to maintain access
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Access policy for Container App managed identity
@@ -82,6 +88,16 @@ resource "azurerm_key_vault_access_policy" "container_app" {
 resource "azurerm_key_vault_secret" "fingrid_api_key" {
   name         = "fingrid-api-key"
   value        = var.fingrid_api_key
+  key_vault_id = azurerm_key_vault.main.id
+
+  depends_on = [azurerm_key_vault_access_policy.deployer]
+}
+
+# Store W&B API Key in Key Vault (optional)
+resource "azurerm_key_vault_secret" "wandb_api_key" {
+  count        = var.wandb_api_key != "" ? 1 : 0
+  name         = "wandb-api-key"
+  value        = var.wandb_api_key
   key_vault_id = azurerm_key_vault.main.id
 
   depends_on = [azurerm_key_vault_access_policy.deployer]
