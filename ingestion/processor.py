@@ -99,26 +99,62 @@ def merge_datasets(wind_df: pd.DataFrame, mfrr_df: pd.DataFrame, price_df: pd.Da
     return merged
 
 
-def create_lag_features(df: pd.DataFrame) -> pd.DataFrame:
+def merge_datasets_realtime(wind_df: pd.DataFrame, mfrr_df: pd.DataFrame, price_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge datasets for real-time prediction, keeping rows where wind/mFRR exist
+    even if price is not yet available.
+    
+    Uses left join to preserve wind/mFRR timestamps that don't have price data yet.
+    This allows predicting for timestamps where price hasn't been published.
+    
+    Args:
+        wind_df: Wind power data (resampled to 15min)
+        mfrr_df: mFRR activation data (resampled to 15min)
+        price_df: Imbalance price data (native 15min)
+    
+    Returns:
+        Merged DataFrame with NaN for missing price values
+    """
+    # Merge wind and mfrr (inner join - both should be available for prediction)
+    merged = pd.merge(wind_df, mfrr_df, on="timestamp", how="inner")
+    
+    # Merge with price using LEFT join - keep rows even without price
+    merged = pd.merge(merged, price_df, on="timestamp", how="left")
+    
+    # Sort by timestamp
+    merged = merged.sort_values("timestamp").reset_index(drop=True)
+    
+    return merged
+
+
+def create_lag_features(df: pd.DataFrame, for_realtime: bool = False) -> pd.DataFrame:
     """
     Create lag features for temporal patterns.
     Uses multiple lag horizons to capture short and long-term dependencies.
     
     Args:
         df: DataFrame with timestamp and value columns
+        for_realtime: If True, forward-fill NaN prices before computing lags
+                      (allows prediction for timestamps without known price)
     
     Returns:
         DataFrame with lag features added
     """
     df = df.copy()
     
+    # For real-time prediction, use the last known price for lag calculations
+    # This allows predicting for timestamps where price isn't available yet
+    price_col = df["imbalance_price"]
+    if for_realtime:
+        price_col = price_col.ffill()
+    
     # Price lags - most important for prediction
-    df["price_lag_1h"] = df["imbalance_price"].shift(LAG_1H)
-    df["price_lag_2h"] = df["imbalance_price"].shift(LAG_2H)
-    df["price_lag_3h"] = df["imbalance_price"].shift(LAG_3H)
-    df["price_lag_6h"] = df["imbalance_price"].shift(LAG_6H)
-    df["price_lag_12h"] = df["imbalance_price"].shift(LAG_12H)
-    df["price_lag_24h"] = df["imbalance_price"].shift(LAG_24H)  # Same time yesterday
+    df["price_lag_1h"] = price_col.shift(LAG_1H)
+    df["price_lag_2h"] = price_col.shift(LAG_2H)
+    df["price_lag_3h"] = price_col.shift(LAG_3H)
+    df["price_lag_6h"] = price_col.shift(LAG_6H)
+    df["price_lag_12h"] = price_col.shift(LAG_12H)
+    df["price_lag_24h"] = price_col.shift(LAG_24H)  # Same time yesterday
     
     # Wind lags - key driver of price
     df["wind_lag_1h"] = df["wind_power_mw"].shift(LAG_1H)
@@ -131,43 +167,49 @@ def create_lag_features(df: pd.DataFrame) -> pd.DataFrame:
     df["mfrr_lag_3h"] = df["mfrr_price"].shift(LAG_3H)
     
     # Price change features (momentum)
-    df["price_change_1h"] = df["imbalance_price"].shift(LAG_1H) - df["imbalance_price"].shift(LAG_2H)
-    df["price_change_3h"] = df["imbalance_price"].shift(LAG_1H) - df["imbalance_price"].shift(LAG_1H + LAG_3H)
+    df["price_change_1h"] = price_col.shift(LAG_1H) - price_col.shift(LAG_2H)
+    df["price_change_3h"] = price_col.shift(LAG_1H) - price_col.shift(LAG_1H + LAG_3H)
     
     return df
 
 
-def create_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
+def create_rolling_features(df: pd.DataFrame, for_realtime: bool = False) -> pd.DataFrame:
     """
     Create rolling statistics to capture trends and volatility.
     Uses multiple window sizes, all shifted by 1 to avoid data leakage.
     
     Args:
         df: DataFrame with timestamp and value columns
+        for_realtime: If True, forward-fill NaN prices before computing rolling stats
     
     Returns:
         DataFrame with rolling features added
     """
     df = df.copy()
     
+    # For real-time prediction, use the last known price for rolling calculations
+    price_col = df["imbalance_price"]
+    if for_realtime:
+        price_col = price_col.ffill()
+    
     # Rolling means - capture trends
-    df["price_rolling_1h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_1H).mean()
-    df["price_rolling_3h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_3H).mean()
-    df["price_rolling_6h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_6H).mean()
-    df["price_rolling_24h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_24H).mean()
+    df["price_rolling_1h"] = price_col.shift(1).rolling(window=ROLLING_1H).mean()
+    df["price_rolling_3h"] = price_col.shift(1).rolling(window=ROLLING_3H).mean()
+    df["price_rolling_6h"] = price_col.shift(1).rolling(window=ROLLING_6H).mean()
+    df["price_rolling_24h"] = price_col.shift(1).rolling(window=ROLLING_24H).mean()
     
     df["wind_rolling_1h"] = df["wind_power_mw"].shift(1).rolling(window=ROLLING_1H).mean()
     df["wind_rolling_3h"] = df["wind_power_mw"].shift(1).rolling(window=ROLLING_3H).mean()
     df["wind_rolling_6h"] = df["wind_power_mw"].shift(1).rolling(window=ROLLING_6H).mean()
     
     # Rolling standard deviation - capture volatility
-    df["price_volatility_3h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_3H).std()
-    df["price_volatility_6h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_6H).std()
+    df["price_volatility_3h"] = price_col.shift(1).rolling(window=ROLLING_3H).std()
+    df["price_volatility_6h"] = price_col.shift(1).rolling(window=ROLLING_6H).std()
     df["wind_volatility_3h"] = df["wind_power_mw"].shift(1).rolling(window=ROLLING_3H).std()
     
     # Rolling min/max - capture range
-    df["price_min_6h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_6H).min()
-    df["price_max_6h"] = df["imbalance_price"].shift(1).rolling(window=ROLLING_6H).max()
+    df["price_min_6h"] = price_col.shift(1).rolling(window=ROLLING_6H).min()
+    df["price_max_6h"] = price_col.shift(1).rolling(window=ROLLING_6H).max()
     df["price_range_6h"] = df["price_max_6h"] - df["price_min_6h"]
     
     return df

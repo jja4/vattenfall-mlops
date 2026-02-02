@@ -20,11 +20,12 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from dotenv import load_dotenv
 
 from app.schemas import HealthResponse, PredictionResponse, ErrorResponse
-from models.train import load_model
+from models import load_model
 from ingestion.client import FingridClient
 from ingestion.processor import (
     resample_to_15min,
     merge_datasets,
+    merge_datasets_realtime,
     create_lag_features,
     create_rolling_features,
     create_temporal_features,
@@ -136,20 +137,28 @@ def _is_cache_valid() -> bool:
     return age < _data_cache["ttl_seconds"]
 
 
-def _fetch_latest_data() -> pd.DataFrame:
+def _fetch_latest_data(realtime: bool = False) -> pd.DataFrame:
     """
     Fetch latest data from Fingrid API.
     Uses cache to avoid hammering the API.
+    
+    Args:
+        realtime: If True, use left-join to include timestamps without price data
+                  (for real-time prediction). If False, only return rows where
+                  all data is available (for metrics calculation).
     
     Returns:
         DataFrame with merged wind, mfrr, and price data
     """
     global _data_cache
     
+    cache_key = "data_realtime" if realtime else "data"
+    
     # Return cached data if valid
     if _is_cache_valid():
-        logger.info("Using cached Fingrid data")
-        return _data_cache["data"]
+        if cache_key in _data_cache and _data_cache[cache_key] is not None:
+            logger.info(f"Using cached Fingrid data (realtime={realtime})")
+            return _data_cache[cache_key]
     
     logger.info("Fetching fresh data from Fingrid API...")
     
@@ -165,53 +174,62 @@ def _fetch_latest_data() -> pd.DataFrame:
         mfrr_df = client.get_mfrr_activation(start_time, end_time)
         price_df = client.get_imbalance_price(start_time, end_time)
         
-        if wind_df.empty or mfrr_df.empty or price_df.empty:
-            raise ValueError("One or more datasets returned empty")
+        if wind_df.empty or mfrr_df.empty:
+            raise ValueError("Wind or mFRR datasets returned empty")
         
-        logger.info(f"  Wind: {len(wind_df)} rows")
-        logger.info(f"  mFRR: {len(mfrr_df)} rows")
-        logger.info(f"  Price: {len(price_df)} rows")
+        logger.info(f"  Wind: {len(wind_df)} rows, latest: {wind_df['timestamp'].max()}")
+        logger.info(f"  mFRR: {len(mfrr_df)} rows, latest: {mfrr_df['timestamp'].max()}")
+        logger.info(f"  Price: {len(price_df)} rows, latest: {price_df['timestamp'].max() if not price_df.empty else 'N/A'}")
         
         # Resample to 15-min intervals
         wind_df = resample_to_15min(wind_df, "wind_power_mw", method="mean")
         mfrr_df = resample_to_15min(mfrr_df, "mfrr_price", method="ffill")
-        price_df = resample_to_15min(price_df, "imbalance_price", method="ffill")
+        price_df = resample_to_15min(price_df, "imbalance_price", method="ffill") if not price_df.empty else pd.DataFrame(columns=["timestamp", "imbalance_price"])
         
-        # Merge datasets
+        # Merge datasets - use inner join for historical (with actuals), left join for realtime
         merged = merge_datasets(wind_df, mfrr_df, price_df)
+        merged_realtime = merge_datasets_realtime(wind_df, mfrr_df, price_df)
         
-        # Update cache
+        # Update cache with both versions
         _data_cache["data"] = merged
+        _data_cache["data_realtime"] = merged_realtime
         _data_cache["timestamp"] = datetime.now(timezone.utc)
         
-        logger.info(f"  Merged: {len(merged)} rows")
-        return merged
+        logger.info(f"  Merged (inner): {len(merged)} rows")
+        logger.info(f"  Merged (realtime): {len(merged_realtime)} rows")
+        
+        return merged_realtime if realtime else merged
         
     except Exception as e:
         logger.error(f"Failed to fetch Fingrid data: {e}")
         
         # Return stale cache if available (better than nothing)
-        if _data_cache["data"] is not None:
+        if cache_key in _data_cache and _data_cache[cache_key] is not None:
             logger.warning("Returning stale cached data")
-            return _data_cache["data"]
+            return _data_cache[cache_key]
         
         raise
 
 
-def _prepare_features(df: pd.DataFrame) -> tuple[np.ndarray, datetime, datetime]:
+def _prepare_features(df: pd.DataFrame, for_realtime: bool = False) -> tuple[np.ndarray, datetime, datetime]:
     """
     Prepare features for prediction from raw merged data.
+    
+    Args:
+        df: Raw merged data
+        for_realtime: If True, use forward-filled prices for lag features
+                      (allows prediction even when price is not yet known)
     
     Returns:
         Tuple of (features array, prediction_for timestamp, data_timestamp)
     """
-    # Apply feature engineering (same as training)
-    df = create_lag_features(df)
-    df = create_rolling_features(df)
+    # Apply feature engineering (same as training, but with realtime option)
+    df = create_lag_features(df, for_realtime=for_realtime)
+    df = create_rolling_features(df, for_realtime=for_realtime)
     df = create_temporal_features(df)
     
     # Drop NaN rows from lag/rolling operations
-    df = df.dropna().reset_index(drop=True)
+    df = df.dropna(subset=_feature_names).reset_index(drop=True)
     
     if df.empty:
         raise ValueError("No valid data after feature engineering")
@@ -221,7 +239,8 @@ def _prepare_features(df: pd.DataFrame) -> tuple[np.ndarray, datetime, datetime]
     
     # Get timestamps
     data_timestamp = latest["timestamp"].iloc[0]
-    prediction_for = data_timestamp + timedelta(minutes=15)  # Predicting next interval
+    # For real-time: we're predicting the price AT this timestamp (nowcast)
+    prediction_for = data_timestamp
     
     # Select features in the same order as training
     if _feature_names is None:
@@ -251,29 +270,30 @@ def _prepare_features(df: pd.DataFrame) -> tuple[np.ndarray, datetime, datetime]
 )
 async def predict():
     """
-    Get price prediction for the next 15-minute interval.
+    Get real-time price prediction for the current/latest interval.
     
     This endpoint:
-    1. Fetches the latest data from Fingrid API (cached for 5 min)
-    2. Processes features matching the training format
-    3. Returns the predicted imbalance price
+    1. Fetches the latest wind and mFRR data from Fingrid API (cached for 5 min)
+    2. Uses the most recent available price for lag features
+    3. Returns the predicted imbalance price for the latest timestamp
     
-    The prediction is for the next 15-minute interval after the latest available data.
+    The prediction is made in real-time using the most recent input data,
+    even if the actual price for that timestamp hasn't been published yet.
     """
     if _model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     
     try:
-        # Fetch latest data
-        merged_df = _fetch_latest_data()
+        # Fetch latest data (realtime=True to include timestamps without price)
+        merged_df = _fetch_latest_data(realtime=True)
         
-        # Prepare features
-        X, prediction_for, data_timestamp = _prepare_features(merged_df)
+        # Prepare features (for_realtime=True uses forward-filled prices for lags)
+        X, prediction_for, data_timestamp = _prepare_features(merged_df, for_realtime=True)
         
         # Make prediction
         prediction = _model.predict(X)[0]
         
-        logger.info(f"Prediction: {prediction:.2f} EUR/MWh for {prediction_for}")
+        logger.info(f"Real-time prediction: {prediction:.2f} EUR/MWh for {prediction_for}")
         
         return PredictionResponse(
             predicted_price=round(float(prediction), 2),
@@ -310,96 +330,118 @@ async def model_info():
 @app.get("/dashboard", response_class=HTMLResponse, tags=["Visualization"])
 async def dashboard():
     """
-    Interactive dashboard showing recent data and predictions.
+    Interactive dashboard showing recent data and real-time predictions.
     Returns an HTML page with Plotly charts.
     
-    Note: Predictions are made for T+15min using features at time T.
-    We align predictions with actual future values for proper comparison.
+    Shows:
+    - Historical predictions vs actual prices (where actuals are available)
+    - Real-time predictions for timestamps where price is not yet published
+    - Current prediction highlighted
     """
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
     
     try:
-        # Fetch latest data
-        raw_data = _fetch_latest_data()
+        # Fetch data with realtime=True to get timestamps without price
+        raw_data = _fetch_latest_data(realtime=True)
         
         if raw_data.empty:
             return HTMLResponse("<h1>No data available</h1>", status_code=503)
         
-        # Apply feature engineering to get features for ALL rows (not just latest)
+        # Apply feature engineering with realtime=True (forward-fill prices for lags)
         df = raw_data.copy()
-        df = create_lag_features(df)
-        df = create_rolling_features(df)
+        df = create_lag_features(df, for_realtime=True)
+        df = create_rolling_features(df, for_realtime=True)
         df = create_temporal_features(df)
         
-        # Drop NaN rows from lag/rolling operations
-        df = df.dropna().reset_index(drop=True)
+        # Drop rows where we can't compute features (early rows without enough lag history)
+        df = df.dropna(subset=_feature_names).reset_index(drop=True)
         
-        if df.empty or len(df) < 10:
+        if df.empty or len(df) < 5:
             return HTMLResponse("<h1>Insufficient data for visualization</h1>", status_code=503)
         
-        # Get predictions for all available rows
-        # Prediction at row i is for timestamp[i] + 15min = timestamp[i+1]
+        # Get predictions for ALL rows (including those without actual price)
         X = df[_feature_names].values
         if _scaler:
             X = _scaler.transform(X)
         predictions = _model.predict(X)
         
-        # ALIGNMENT FIX: Predictions made at T are for T+15min
-        # So prediction[i] should compare with actual[i+1]
-        # We shift predictions back by 1 to align with actuals
-        # Or equivalently: for time T, we show prediction made at T-15min
+        # Separate data into historical (with actuals) and forecast (without actuals)
+        has_actual = ~df['imbalance_price'].isna()
         
-        # Use timestamps as the common x-axis (excluding first point for alignment)
-        # Convert to Python lists to avoid Plotly binary encoding issues
-        aligned_timestamps = df['timestamp'].values[1:].tolist()  # T+15min timestamps
-        aligned_actuals = df['imbalance_price'].values[1:].tolist()  # Actual at T+15min
-        aligned_predictions = predictions[:-1].tolist()  # Prediction made at T for T+15min
+        # Historical data (where we have actual prices)
+        hist_timestamps = df.loc[has_actual, 'timestamp'].tolist()
+        hist_actuals = df.loc[has_actual, 'imbalance_price'].tolist()
+        hist_preds = predictions[has_actual].tolist()
         
-        # Wind and mFRR also aligned to same timestamps
-        aligned_wind = df['wind_power_mw'].values[1:].tolist()
-        aligned_mfrr = df['mfrr_price'].values[1:].tolist()
+        # Forecast data (where we don't have actual prices yet)
+        forecast_timestamps = df.loc[~has_actual, 'timestamp'].tolist()
+        forecast_preds = predictions[~has_actual].tolist()
         
-        # Create subplots with shared x-axis for alignment
+        # All timestamps for wind/mFRR (always available)
+        all_timestamps = df['timestamp'].tolist()
+        wind = df['wind_power_mw'].tolist()
+        mfrr = df['mfrr_price'].tolist()
+        
+        # Create subplots
         fig = make_subplots(
             rows=3, cols=1,
             subplot_titles=(
-                '<b>Imbalance Price: Actual vs Model Prediction</b>',
+                '<b>Imbalance Price: Actual vs Real-Time Prediction</b>',
                 '<b>Wind Power Generation</b>',
                 '<b>mFRR Activation Price</b>'
             ),
-            vertical_spacing=0.12,
+            vertical_spacing=0.16,
             row_heights=[0.5, 0.25, 0.25],
-            shared_xaxes=True  # Share x-axis for time alignment
+            shared_xaxes=True
         )
         
-        # Plot 1: Actual vs Predicted (properly aligned)
-        fig.add_trace(
-            go.Scatter(
-                x=aligned_timestamps, 
-                y=aligned_actuals, 
-                name='Actual Price',
-                line=dict(color='#2E86AB', width=2),
-                hovertemplate='Actual: %{y:.2f} EUR/MWh<extra></extra>'
-            ),
-            row=1, col=1
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=aligned_timestamps, 
-                y=aligned_predictions, 
-                name='Predicted Price (15min ahead)',
-                line=dict(color='#E94F37', width=2, dash='dash'),
-                hovertemplate='Predicted: %{y:.2f} EUR/MWh<extra></extra>'
-            ),
-            row=1, col=1
-        )
+        # Plot 1a: Actual prices (historical)
+        if hist_actuals:
+            fig.add_trace(
+                go.Scatter(
+                    x=hist_timestamps, 
+                    y=hist_actuals, 
+                    name='Actual Price',
+                    line=dict(color='#2E86AB', width=2),
+                    hovertemplate='Actual: %{y:.2f} EUR/MWh<extra></extra>'
+                ),
+                row=1, col=1
+            )
+        
+        # Plot 1b: Historical predictions (where we have actuals)
+        if hist_preds:
+            fig.add_trace(
+                go.Scatter(
+                    x=hist_timestamps, 
+                    y=hist_preds, 
+                    name='Model Prediction (Historical)',
+                    line=dict(color='#E94F37', width=2, dash='dash'),
+                    hovertemplate='Predicted: %{y:.2f} EUR/MWh<extra></extra>'
+                ),
+                row=1, col=1
+            )
+        
+        # Plot 1c: Real-time predictions (where we don't have actuals yet)
+        if forecast_preds:
+            fig.add_trace(
+                go.Scatter(
+                    x=forecast_timestamps, 
+                    y=forecast_preds, 
+                    name='Real-Time Prediction',
+                    mode='lines+markers',
+                    line=dict(color='#9B59B6', width=3),
+                    marker=dict(size=10, symbol='diamond'),
+                    hovertemplate='<b>LIVE</b> Predicted: %{y:.2f} EUR/MWh<extra></extra>'
+                ),
+                row=1, col=1
+            )
         
         # Plot 2: Wind Power
         fig.add_trace(
             go.Scatter(
-                x=aligned_timestamps, 
-                y=aligned_wind, 
+                x=all_timestamps, 
+                y=wind, 
                 name='Wind Power (MW)',
                 line=dict(color='#44AF69', width=1.5),
                 fill='tozeroy', 
@@ -412,8 +454,8 @@ async def dashboard():
         # Plot 3: mFRR Price
         fig.add_trace(
             go.Scatter(
-                x=aligned_timestamps, 
-                y=aligned_mfrr, 
+                x=all_timestamps, 
+                y=mfrr, 
                 name='mFRR Price (EUR/MWh)',
                 line=dict(color='#F18F01', width=1.5),
                 hovertemplate='mFRR: %{y:.2f} EUR/MWh<extra></extra>'
@@ -421,23 +463,30 @@ async def dashboard():
             row=3, col=1
         )
         
-        # Calculate metrics on aligned data (convert back to numpy for calculations)
-        actuals_arr = np.array(aligned_actuals)
-        preds_arr = np.array(aligned_predictions)
-        mae = np.mean(np.abs(actuals_arr - preds_arr))
-        rmse = np.sqrt(np.mean((actuals_arr - preds_arr) ** 2))
+        # Calculate metrics only on historical data (where we have actuals)
+        if len(hist_actuals) > 1:
+            actuals_arr = np.array(hist_actuals)
+            preds_arr = np.array(hist_preds)
+            mae = np.mean(np.abs(actuals_arr - preds_arr))
+            rmse = np.sqrt(np.mean((actuals_arr - preds_arr) ** 2))
+            corr = np.corrcoef(actuals_arr, preds_arr)[0, 1]
+            metrics_text = (f'MAE: {mae:.2f} EUR/MWh | RMSE: {rmse:.2f} EUR/MWh | '
+                          f'Correlation: {corr:.3f} | Historical Points: {len(hist_actuals)}')
+        else:
+            metrics_text = "Insufficient historical data for metrics"
         
-        # Correlation between prediction and actual
-        corr = np.corrcoef(actuals_arr, preds_arr)[0, 1]
+        # Latest prediction info
+        latest_pred = predictions[-1]
+        latest_ts = df['timestamp'].iloc[-1]
+        has_latest_actual = not pd.isna(df['imbalance_price'].iloc[-1])
         
-        # Update layout with better legend and spacing
+        # Update layout
         fig.update_layout(
             title=dict(
                 text=f'<b>Finland Electricity Imbalance Price Dashboard</b><br>'
-                     f'<span style="font-size:14px">MAE: {mae:.2f} EUR/MWh | '
-                     f'RMSE: {rmse:.2f} EUR/MWh | '
-                     f'Correlation: {corr:.3f} | '
-                     f'Data Points: {len(aligned_predictions)}</span>',
+                     f'<span style="font-size:14px">{metrics_text}</span><br>'
+                     f'<span style="font-size:16px; color:#9B59B6"><b>Latest Prediction: {latest_pred:.2f} EUR/MWh for {latest_ts.strftime("%H:%M UTC")}'
+                     f'{" (actual available)" if has_latest_actual else " (LIVE)"}</b></span>',
                 x=0.5,
                 xanchor='center',
                 font=dict(size=18)
@@ -447,7 +496,7 @@ async def dashboard():
             legend=dict(
                 orientation='h',
                 yanchor='bottom',
-                y=-0.25,  # Move legend further down to avoid overlap with x-axis title
+                y=-0.25,
                 xanchor='center',
                 x=0.5,
                 bgcolor='rgba(255,255,255,0.8)',
@@ -459,10 +508,10 @@ async def dashboard():
             ),
             template='plotly_white',
             hovermode='x unified',
-            margin=dict(b=120, l=80, r=50, t=120)  # More margins for labels
+            margin=dict(b=120, l=80, r=50, t=140)
         )
         
-        # Update axes labels - show time on all charts
+        # Update axes labels
         fig.update_yaxes(title_text='Price (EUR/MWh)', row=1, col=1)
         fig.update_xaxes(title_text='Time (UTC)', showticklabels=True, row=1, col=1)
         
@@ -475,6 +524,9 @@ async def dashboard():
         # Calculate data lag
         latest_data_time = df['timestamp'].max()
         data_lag_minutes = (datetime.now(timezone.utc) - latest_data_time.to_pydatetime().replace(tzinfo=timezone.utc)).total_seconds() / 60
+        
+        # Count realtime predictions
+        n_realtime = len(forecast_preds)
         
         # Generate HTML
         html_content = f"""
@@ -542,19 +594,22 @@ async def dashboard():
                     <button class="refresh-btn" onclick="location.reload()">↻ Refresh</button>
                 </div>
                 <div class="info">
-                    ℹ️ Predictions are made 15 minutes ahead. The model uses current wind power, mFRR prices, 
-                    and historical lags to predict the next interval's imbalance price.
+                    ℹ️ The model uses current wind power, mFRR prices, 
+                    and historical lags to predict the imbalance price in real-time.
                 </div>
-                <div class="info warning">
-                    ⏱️ <strong>Data Lag:</strong> Latest data point is from {latest_data_time.strftime('%Y-%m-%d %H:%M UTC')} 
-                    (~{int(data_lag_minutes)} min / {data_lag_minutes/60:.1f} hours behind current time). 
-                    This is normal — Fingrid API publishes data with ~1-2 hour delay.
+                <div class="info {'warning' if n_realtime > 0 else ''}">
+                    ⏱️ <strong>{'🔴 LIVE PREDICTIONS' if n_realtime > 0 else 'Data Status'}:</strong> 
+                    {'<b>' + str(n_realtime) + ' real-time prediction(s)</b> shown for intervals where actual price is not yet available. ' if n_realtime > 0 else ''}
+                    Latest data: {latest_data_time.strftime('%Y-%m-%d %H:%M UTC')} 
+                    (~{int(data_lag_minutes)} min behind).
                 </div>
                 <div id="chart"></div>
             </div>
             <script>
                 var plotlyData = {fig.to_json()};
                 Plotly.newPlot('chart', plotlyData.data, plotlyData.layout, {{responsive: true}});
+                // Auto-refresh every 2 minutes
+                setTimeout(function() {{ location.reload(); }}, 120000);
             </script>
         </body>
         </html>
