@@ -85,7 +85,7 @@ Real-time electricity imbalance price prediction service for Finland, featuring 
 | Stage | Trigger | Description |
 |-------|---------|-------------|
 | **1. Ingest** | Hourly cron | DLT fetches new data from Fingrid API → Azure Blob Storage |
-| **2. Features** | After ingest | Processes raw data → creates 44 ML features |
+| **2. Features** | After ingest | Processes raw data → creates 42 ML features |
 | **3. Train** | After features | Trains challenger model → registers to W&B as `staging` |
 | **4. Promote** | After train | Compares staging vs production MAE → promotes if better |
 | **5. Deploy** | Push to main | Builds container → deploys to Azure Container Apps |
@@ -102,7 +102,7 @@ Real-time electricity imbalance price prediction service for Finland, featuring 
 │   │ model:staging       │             │ model:production    │           │
 │   │                     │   Compare   │                     │           │
 │   │ MAE: 25.57          │────────────▶│ MAE: 25.65          │           │
-│   │ R²:  0.7978         │             │ R²:  0.8014         │           │
+│   │ R²:  0.8078         │             │ R²:  0.8014         │           │
 │   └─────────────────────┘             └─────────────────────┘           │
 │            │                                    │                       │
 │            │         ┌─────────────────┐        │                       │
@@ -153,7 +153,7 @@ curl https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainera
 {
   "model_version": "v2",
   "model_source": "wandb_registry",
-  "features_count": 44
+  "features_count": 42
 }
 ```
 
