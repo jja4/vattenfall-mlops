@@ -1,106 +1,290 @@
 # Vattenfall MLOps
 
-ML Service for predicting Finland's electricity imbalance prices using real-time Fingrid API data.
+Real-time electricity imbalance price prediction service for Finland, powered by machine learning and Fingrid API data.
 
-## Live Service
+## 🌐 Live Service
 
 **Production URL**: https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io
 
-- `/health` - Health check endpoint
-- `/predict` - Real-time price prediction
-- `/dashboard` - Interactive data visualization
+| Endpoint | Description |
+|----------|-------------|
+| [`/docs`](https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/docs) | FastAPI interactive API docs |
+| [`/health`](https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/health) | Health check & model status |
+| [`/predict`](https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/predict) | Real-time price prediction |
+| [`/dashboard`](https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/dashboard) | Interactive data visualization |
 
-## Structure
-- `app/`: FastAPI application
-- `ingestion/`: Tools for fetching and storing Fingrid data
-- `models/`: Training scripts and model artifacts
-- `data/`: Local data storage (ignored by git)
-- `infra/`: Terraform IaC for Azure deployment
-- `scripts/`: Deployment and maintenance scripts
 
-## Local Development
+---
+
+## 🏗️ Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              AZURE CLOUD (North Europe)                         │
+│                                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐    │
+│  │                     Resource Group: rg-vattenfall-mlops                 │    │
+│  │                                                                         │    │
+│  │   ┌──────────────┐      ┌──────────────────────────────────────────┐    │    │
+│  │   │   Azure      │      │     Container Apps Environment           │    │    │
+│  │   │  Container   │      │  ┌────────────────────────────────────┐  │    │    │
+│  │   │  Registry    │─────▶│  │     Container App (FastAPI)        │  │    │    │
+│  │   │  (ACR)       │ pull │  │                                    │  │    │    │
+│  │   │              │      │  │  ┌────────┐  ┌─────────┐  ┌─────┐  │  │    │    │
+│  │   │  Images:     │      │  │  │/health │  │/predict │  │/dash│  │  │    │    │
+│  │   │  vattenfall- │      │  │  └────────┘  └─────────┘  └─────┘  │  │    │    │
+│  │   │  ml:latest   │      │  │                                    │  │    │    │
+│  │   └──────────────┘      │  │  Auto-scaling: 0-3 replicas        │  │    │    │
+│  │          ▲              │  │  CPU: 0.5 cores | Memory: 1Gi      │  │    │    │
+│  │          │              │  └────────────────────────────────────┘  │    │    │
+│  │   Managed Identity      └──────────────────────────────────────────┘    │    │
+│  │   (AcrPull role)                         │                              │    │
+│  │          │                               │ reads secrets                │    │
+│  │          ▼                               ▼                              │    │
+│  │   ┌──────────────┐              ┌──────────────┐                        │    │
+│  │   │    User      │              │  Azure Key   │                        │    │
+│  │   │  Assigned    │─────────────▶│    Vault     │                        │    │
+│  │   │  Managed     │  Get Secret  │              │                        │    │
+│  │   │  Identity    │              │  Secrets:    │                        │    │
+│  │   └──────────────┘              │  - fingrid-  │                        │    │
+│  │                                 │    api-key   │                        │    │
+│  │   ┌──────────────┐              └──────────────┘                        │    │
+│  │   │ Log Analytics│◀── Audit logs from ACR, Key Vault, Container App     │    │
+│  │   │  Workspace   │                                                      │    │
+│  │   └──────────────┘                                                      │    │
+│  └─────────────────────────────────────────────────────────────────────────┘    │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                        │
+                                        │ HTTPS
+                                        ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              EXTERNAL DATA SOURCE                               │
+│                                                                                 │
+│   ┌──────────────────────────────────────────────────────────────────────┐      │
+│   │                         Fingrid Open Data API                        │      │
+│   │                                                                      │      │
+│   │   Dataset #181: Wind Power Production (MW)                           │      │
+│   │   Dataset #342: mFRR Activation (MW)                                 │      │
+│   │   Dataset #319: Imbalance Price (EUR/MWh) ◀── Target Variable        │      │
+│   │                                                                      │      │
+│   │   Resolution: 15-minute intervals | Coverage: Real-time + Historical │      │
+│   └──────────────────────────────────────────────────────────────────────┘      │
+│                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow
+
+1. **Ingestion**: Fetches real-time data from Fingrid API (wind power, mFRR activation, imbalance prices)
+2. **Processing**: Resamples to 15-minute intervals, creates lag features, rolling means, hour-of-day encoding
+3. **Prediction**: RandomForest model (42 features) predicts next-hour imbalance price
+4. **Serving**: FastAPI returns prediction with auto-scaling based on load
+
+### Security Model
+
+- **Secrets in Key Vault**: API keys stored securely, accessed via managed identity
+- **RBAC**: Least-privilege roles (AcrPull for container, Get/List for secrets)
+- **Audit logging**: All access to ACR and Key Vault logged to Log Analytics
+
+---
+
+## 📡 API Usage
+
+### Health Check
+
+```bash
+curl https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/health
+```
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "model_loaded": true,
+  "model_features": 42,
+  "timestamp": "2026-02-01T18:05:24.498798Z"
+}
+```
+
+### Get Prediction
+
+```bash
+curl https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/predict
+```
+
+**Response:**
+```json
+{
+  "predicted_price": 73.73,
+  "unit": "EUR/MWh",
+  "prediction_for": "2026-02-01T17:15:00Z",
+  "data_timestamp": "2026-02-01T17:00:00Z",
+  "model_version": "2026-02-01T14:46:00.629991"
+}
+```
+
+### Interactive Dashboard
+
+Open in browser: https://vattenfall-mlops-app.niceriver-dbaaae1a.northeurope.azurecontainerapps.io/dashboard
+
+Features:
+- Real-time price chart (last 5 hours)
+- Wind power production overlay
+- mFRR activation events
+- Hourly pattern analysis
+
+---
+
+## 📁 Project Structure
+
+```
+vattenfall-mlops/
+├── app/                    # FastAPI application
+│   ├── main.py            # API endpoints (/health, /predict, /dashboard)
+│   └── schemas.py         # Pydantic models
+├── ingestion/             # Data pipeline
+│   ├── client.py          # Fingrid API client
+│   ├── processor.py       # Feature engineering
+│   └── storage.py         # Parquet I/O helpers
+├── models/                # ML artifacts
+│   ├── train.py           # Training script (W&B integration)
+│   └── model.pkl          # Serialized RandomForest model
+├── infra/                 # Terraform IaC
+│   ├── main.tf            # Azure resources
+│   ├── security.tf        # Managed identity, Key Vault, RBAC
+│   ├── variables.tf       # Configuration
+│   └── outputs.tf         # Deployment outputs
+├── docs/                  # Documentation
+│   └── project_plan.md    # Development roadmap
+├── Dockerfile             # Container image definition
+├── pyproject.toml         # Python dependencies (uv)
+└── .env                   # Local secrets (gitignored)
+```
+
+---
+
+## 🚀 Azure Deployment
 
 ### Prerequisites
-- [uv](https://docs.astral.sh/uv/) - Python package manager
-- [Docker](https://www.docker.com/) - For containerization
-- [Terraform](https://www.terraform.io/) - For infrastructure (optional)
-- [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/) - For deployment (optional)
 
-### Setup
+| Tool | Installation | Purpose |
+|------|--------------|---------|
+| Azure CLI | `brew install azure-cli` | Azure authentication |
+| Terraform | `brew install terraform` | Infrastructure as Code |
+| Docker | [docker.com](https://docker.com) | Container builds |
+
+### Step 1: Initial Setup
+
 ```bash
-# Install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Clone repository
+git clone <repo-url>
+cd vattenfall-mlops
 
-# Sync dependencies
-uv sync
-
-# Create .env file with required keys
-cp .env.example .env  # Then edit with your values
-```
-
-### Running Locally
-```bash
-# Run the API
-uv run uvicorn app.main:app --reload
-
-# Train a new model
-uv run python models/train.py
-
-# Build and run Docker container
-docker build -t vattenfall-ml .
-docker run -p 8080:8080 --env-file .env vattenfall-ml
-```
-
-## Azure Deployment
-
-### ⚠️ Security First
-**Before deploying**, review [docs/SECURITY.md](docs/SECURITY.md) to set up:
-- Service Principal for Terraform (instead of personal credentials)
-- Managed Identity for Container App
-- Azure Key Vault for secrets
-- RBAC and audit logging
-
-### Quick Start (Development)
-```bash
-# Login to Azure (for testing only - use service principal in production)
+# Login to Azure
 az login
 
-# Deploy infrastructure
-./scripts/setup-azure.sh
-```
+# Set required environment variables
+export FINGRID_API_KEY="your-fingrid-api-key"
 
-### Production Deployment
-```bash
-# Set service principal credentials
-export ARM_CLIENT_ID="your-sp-client-id"
-export ARM_CLIENT_SECRET="your-sp-secret"
-export ARM_SUBSCRIPTION_ID="your-subscription-id"
-export ARM_TENANT_ID="your-tenant-id"
-
-# Deploy without az login
+# Deploy cloud resources
 cd infra
-terraform apply -var="fingrid_api_key=${FINGRID_API_KEY}"
+terraform init
+terraform apply -var="fingrid_api_key=$FINGRID_API_KEY"
 ```
 
-### Update After Model Retraining
+
+## 💻 Local Development
+
+### Setup
+
 ```bash
-# Quick image update with timestamped tag
-./scripts/update-image.sh
+# Install uv package manager
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Or full deployment
-./scripts/deploy.sh
+# Install dependencies
+uv sync
+
+# Create environment file
+cat > .env << EOF
+FINGRID_API_KEY=your-api-key
+WANDB_API_KEY=your-wandb-key  # Optional
+EOF
 ```
 
-### Infrastructure as Code
-All Azure resources are managed via Terraform in `infra/`:
-- Resource Group
-- Azure Container Registry (admin disabled, uses managed identity)
-- Container Apps Environment
-- Container App with auto-scaling
-- User Assigned Managed Identity
-- Azure Key Vault for secrets
-- Log Analytics with audit logging
+### Run Locally
 
-## Environment Variables
-- `FINGRID_API_KEY` - Required for Fingrid API access
-- `WANDB_API_KEY` - Optional for Weights & Biases logging
+```bash
+# Start FastAPI server
+uv run uvicorn app.main:app --reload --port 8000
+
+# Open in browser
+open http://localhost:8000/dashboard
+```
+
+### Train Model
+
+```bash
+# Train with W&B logging
+uv run python models/train.py
+
+# Model saved to models/model.pkl
+```
+
+### Docker Testing
+
+```bash
+# Build for local testing
+docker build -t vattenfall-ml .
+
+# Run container
+docker run -p 8080:8080 --env-file .env vattenfall-ml
+
+# Test
+curl http://localhost:8080/health
+```
+
+---
+
+## 🔧 Configuration
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `FINGRID_API_KEY` | Yes | API key from [Fingrid Open Data](https://data.fingrid.fi/) |
+| `WANDB_API_KEY` | No | Weights & Biases for experiment tracking |
+
+### Terraform Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `project_name` | `vattenfall-mlops` | Resource naming prefix |
+| `location` | `northeurope` | Azure region |
+| `min_replicas` | `0` | Scale to zero when idle |
+| `max_replicas` | `3` | Maximum container instances |
+| `container_cpu` | `0.5` | CPU cores per instance |
+| `container_memory` | `1Gi` | Memory per instance |
+
+---
+
+## 📊 Model Details
+
+- **Algorithm**: RandomForestRegressor (scikit-learn)
+- **Features**: 42 engineered features including:
+  - Lag features (1h, 2h, 3h, 6h, 12h, 24h)
+  - Rolling means (3h, 6h, 12h, 24h windows)
+  - Hour-of-day cyclical encoding
+  - Day-of-week indicators
+- **Target**: Imbalance price (EUR/MWh)
+- **Training Data**: 1 year of hourly Fingrid data (2025)
+- **Experiment Tracking**: Weights & Biases
+
+---
+
+## 📚 Documentation
+
+- [Project Plan](docs/project_plan.md) - Development roadmap and completed steps
+
+
+
