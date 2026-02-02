@@ -1,0 +1,113 @@
+# Automated Champion Promotion Pipeline
+#
+# Compares staging (challenger) model against production (champion)
+# and promotes if the challenger performs better.
+#
+# Promotion rules:
+# - Challenger MAE must be <= Champion MAE
+# - Challenger R² must not regress by more than 5%
+#
+# Trigger: After training workflow or manual
+#
+# Required Secrets:
+#   WANDB_API_KEY: Weights & Biases API key
+
+name: Promote Model
+
+on:
+  # Triggered after training completes
+  workflow_run:
+    workflows: ["Train Model"]
+    types: [completed]
+    branches: [main, pipeline]
+  
+  # Allow manual trigger
+  workflow_dispatch:
+
+env:
+  WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+
+jobs:
+  promote:
+    name: Evaluate and Promote
+    runs-on: ubuntu-latest
+    
+    outputs:
+      promoted: ${{ steps.promote.outputs.promoted }}
+      new_version: ${{ steps.promote.outputs.new_version }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      
+      - name: Set up Python
+        run: uv python install 3.11
+      
+      - name: Install dependencies
+        run: uv sync --group training
+      
+      - name: Run promotion evaluation
+        id: promote
+        run: |
+          # Run promotion and capture result
+          if uv run python -m pipeline.promote 2>&1 | tee promote.log; then
+            # Check if model was promoted by looking for success message
+            if grep -q "Promotion Complete" promote.log; then
+              echo "promoted=true" >> $GITHUB_OUTPUT
+              # Extract version from log
+              VERSION=$(grep "New production model:" promote.log | awk '{print $NF}')
+              echo "new_version=$VERSION" >> $GITHUB_OUTPUT
+            else
+              echo "promoted=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "promoted=false" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+      
+      - name: Upload promotion logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promotion-logs
+          path: promote.log
+          retention-days: 30
+      
+      - name: Create promotion summary
+        run: |
+          if [ "${{ steps.promote.outputs.promoted }}" == "true" ]; then
+            echo "## 🏆 Model Promoted" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "New production model: **${{ steps.promote.outputs.new_version }}**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Promotion Rejected" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Challenger did not meet promotion criteria." >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "See [W&B Dashboard](https://wandb.ai) for details." >> $GITHUB_STEP_SUMMARY
+
+  # Notify on promotion (optional: trigger deployment)
+  notify:
+    name: Post-Promotion Actions
+    needs: promote
+    if: needs.promote.outputs.promoted == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Log promotion
+        run: |
+          echo "🎉 New champion model deployed: ${{ needs.promote.outputs.new_version }}"
+          echo "The production service will automatically hot-reload the new model."
+      
+      # Optionally trigger a deployment or send notifications
+      # - name: Send Slack notification
+      #   uses: slackapi/slack-github-action@v1
+      #   with:
+      #     payload: |
+      #       {"text": "New champion model: ${{ needs.promote.outputs.new_version }}"}

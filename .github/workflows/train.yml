@@ -1,0 +1,113 @@
+# Challenger Model Training Pipeline
+#
+# Trains a new challenger model and registers it in W&B Model Registry
+# with 'staging' alias for evaluation.
+#
+# Trigger: Daily schedule or manual
+#
+# Required Secrets:
+#   AZURE_STORAGE_CONNECTION_STRING: Azure Blob Storage connection string
+#   WANDB_API_KEY: Weights & Biases API key
+
+name: Train Model
+
+on:
+  # Triggered after features are generated
+  workflow_run:
+    workflows: ["Generate Features"]
+    types: [completed]
+    branches: [main, pipeline]
+  
+  # Also run daily at 3 AM (after feature generation)
+  schedule:
+    - cron: '0 3 * * *'
+  
+  # Allow manual trigger with custom hyperparameters
+  workflow_dispatch:
+    inputs:
+      model_type:
+        description: 'Model type (rf or gb)'
+        required: false
+        default: 'gb'
+      n_estimators:
+        description: 'Number of estimators'
+        required: false
+        default: '200'
+      max_depth:
+        description: 'Max tree depth'
+        required: false
+        default: '8'
+      learning_rate:
+        description: 'Learning rate (for GB)'
+        required: false
+        default: '0.1'
+
+env:
+  AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+  WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+
+jobs:
+  train:
+    name: Train Challenger Model
+    runs-on: ubuntu-latest
+    
+    outputs:
+      model_version: ${{ steps.train.outputs.model_version }}
+      test_mae: ${{ steps.train.outputs.test_mae }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      
+      - name: Set up Python
+        run: uv python install 3.11
+      
+      - name: Install dependencies
+        run: uv sync --group training
+      
+      - name: Train challenger model
+        id: train
+        run: |
+          # Run training and capture output
+          uv run python -m pipeline.train \
+            --model ${{ github.event.inputs.model_type || 'gb' }} \
+            --n-estimators ${{ github.event.inputs.n_estimators || '200' }} \
+            --max-depth ${{ github.event.inputs.max_depth || '8' }} \
+            --learning-rate ${{ github.event.inputs.learning_rate || '0.1' }} \
+            2>&1 | tee training.log
+          
+          # Extract metrics for summary (simple grep approach)
+          echo "Training completed"
+      
+      - name: Upload training logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-logs
+          path: |
+            training.log
+            wandb/
+          retention-days: 30
+
+  # Trigger promotion after successful training
+  promote:
+    name: Trigger Promotion
+    needs: train
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Trigger promotion workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'promote.yml',
+              ref: context.ref
+            })

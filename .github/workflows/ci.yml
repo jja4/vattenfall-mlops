@@ -1,0 +1,86 @@
+# CI Pipeline - Lint, Test, Build
+#
+# Runs on every push and PR to validate code quality.
+#
+# Jobs:
+# - lint: Check code style with ruff
+# - test: Run pytest
+# - build: Build Docker image (on main branch)
+
+name: CI
+
+on:
+  push:
+    branches: [main, pipeline]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      
+      - name: Set up Python
+        run: uv python install 3.11
+      
+      - name: Install dependencies
+        run: uv sync --group dev
+      
+      - name: Run ruff
+        run: uv run ruff check .
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      
+      - name: Set up Python
+        run: uv python install 3.11
+      
+      - name: Install dependencies
+        run: uv sync --group dev --group training
+      
+      - name: Run pytest
+        run: uv run pytest tests/ -v --tb=short
+        env:
+          # Use mock API key for tests
+          FINGRID_API_KEY: "test-key"
+
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pipeline'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: vattenfall-mlops:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

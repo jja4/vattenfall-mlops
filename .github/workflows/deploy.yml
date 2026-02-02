@@ -1,0 +1,177 @@
+# Continuous Deployment Pipeline
+#
+# Builds container image and deploys to Azure Container Apps via Terraform.
+# Infrastructure-as-code ensures reproducible, auditable deployments.
+#
+# Triggers:
+# - Push to main branch (code changes)
+# - After model promotion (optional: faster model refresh)
+# - Manual dispatch
+#
+# The deployed service loads models from W&B Model Registry,
+# enabling zero-downtime model updates without redeployment.
+#
+# Required Secrets:
+#   ARM_CLIENT_ID: Azure Service Principal client ID
+#   ARM_CLIENT_SECRET: Azure Service Principal secret
+#   ARM_SUBSCRIPTION_ID: Azure subscription ID
+#   ARM_TENANT_ID: Azure tenant ID
+#   FINGRID_API_KEY: Fingrid API key
+#   WANDB_API_KEY: W&B API key for model registry
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'ingestion/**'
+      - 'models/__init__.py'
+      - 'Dockerfile'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'infra/**'
+      - '.github/workflows/deploy.yml'
+  
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to deploy (default: git SHA)'
+        required: false
+        default: ''
+
+env:
+  ACR_NAME: acrvattenfall
+  IMAGE_NAME: vattenfall-ml
+
+jobs:
+  build:
+    name: Build Image
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set image tag
+        id: meta
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "image_tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "image_tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.ARM_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.ARM_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.ARM_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.ARM_TENANT_ID }}"
+            }
+      
+      - name: Log in to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+      
+      - name: Build and push image
+        run: |
+          IMAGE="${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}"
+          TAG="${{ steps.meta.outputs.image_tag }}"
+          
+          docker build -t "$IMAGE:$TAG" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:latest"
+          
+          echo "✅ Pushed $IMAGE:$TAG"
+
+  deploy:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6"
+      
+      - name: Terraform Init
+        working-directory: infra
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+        run: terraform init
+      
+      - name: Terraform Apply
+        working-directory: infra
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+          TF_VAR_fingrid_api_key: ${{ secrets.FINGRID_API_KEY }}
+          TF_VAR_wandb_api_key: ${{ secrets.WANDB_API_KEY }}
+          TF_VAR_image_tag: ${{ needs.build.outputs.image_tag }}
+        run: |
+          terraform apply -auto-approve \
+            -var="use_wandb_registry=true"
+      
+      - name: Get deployment URL
+        working-directory: infra
+        env:
+          ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+          ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+          ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+        run: |
+          URL=$(terraform output -raw app_url 2>/dev/null || echo "")
+          if [ -n "$URL" ]; then
+            echo "✅ Deployed to: $URL"
+            echo "🔗 Health check: ${URL}/health"
+          fi
+
+  verify:
+    name: Verify Deployment
+    runs-on: ubuntu-latest
+    needs: deploy
+    
+    steps:
+      - name: Wait for deployment
+        run: sleep 60
+      
+      - name: Health check
+        run: |
+          # Get URL from Azure
+          az login --service-principal \
+            -u "${{ secrets.ARM_CLIENT_ID }}" \
+            -p "${{ secrets.ARM_CLIENT_SECRET }}" \
+            --tenant "${{ secrets.ARM_TENANT_ID }}"
+          
+          FQDN=$(az containerapp show \
+            --name vattenfall-mlops-app \
+            --resource-group rg-vattenfall-mlops \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+          
+          echo "Testing https://$FQDN/health"
+          
+          HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" "https://$FQDN/health")
+          
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "✅ Service healthy!"
+            cat response.json | jq .
+          else
+            echo "❌ Health check failed (HTTP $HTTP_CODE)"
+            cat response.json
+            exit 1
+          fi

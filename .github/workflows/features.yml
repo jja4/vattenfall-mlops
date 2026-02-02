@@ -1,0 +1,59 @@
+# Feature Generation Pipeline
+#
+# Generates features from raw DLT data for model training.
+# Runs after ingestion or on-demand.
+#
+# Trigger: After ingest workflow or manual
+#
+# Required Secrets:
+#   AZURE_STORAGE_CONNECTION_STRING: Azure Blob Storage connection string
+
+name: Generate Features
+
+on:
+  # Triggered after ingest completes
+  workflow_run:
+    workflows: ["Ingest Data"]
+    types: [completed]
+    branches: [main, pipeline]
+  
+  # Also run daily at 2 AM to ensure features are up-to-date
+  schedule:
+    - cron: '0 2 * * *'
+  
+  # Allow manual trigger
+  workflow_dispatch:
+
+env:
+  AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
+
+jobs:
+  features:
+    name: Generate Features
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+      
+      - name: Set up Python
+        run: uv python install 3.11
+      
+      - name: Install dependencies
+        run: uv sync --group training
+      
+      - name: Run feature generation
+        run: uv run python -m pipeline.features
+      
+      - name: Upload feature generation logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-logs
+          path: "*.log"
+          retention-days: 7
