@@ -291,18 +291,6 @@ async def predict():
         raise HTTPException(status_code=500, detail="Prediction failed")
 
 
-@app.post("/predict/invalidate-cache", tags=["Admin"])
-async def invalidate_cache():
-    """
-    Invalidate the Fingrid data cache.
-    Forces fresh data fetch on next prediction.
-    """
-    global _data_cache
-    _data_cache["data"] = None
-    _data_cache["timestamp"] = None
-    return {"message": "Cache invalidated"}
-
-
 @app.get("/model/info", tags=["Admin"])
 async def model_info():
     """Get information about the loaded model."""
