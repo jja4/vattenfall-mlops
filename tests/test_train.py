@@ -8,13 +8,25 @@ import pickle
 import tempfile
 from pathlib import Path
 
-from models.train import (
+from pipeline.train import (
     prepare_data,
     train_model,
     evaluate_model,
-    save_model,
     load_model,
 )
+
+
+def save_model(model, feature_names, output_path, scaler=None):
+    """Helper to save model for testing (mirrors pipeline.train.save_model_artifact)."""
+    artifact = {
+        "model": model,
+        "feature_names": feature_names,
+        "n_features": len(feature_names),
+        "scaler": scaler,
+        "created_at": "2024-01-01T00:00:00Z",
+    }
+    with open(output_path, "wb") as f:
+        pickle.dump(artifact, f)
 
 
 class TestPrepareData:
@@ -92,12 +104,22 @@ class TestPrepareData:
 class TestTrainModel:
     """Tests for model training."""
     
-    def test_trains_random_forest(self):
-        """Should train a RandomForestRegressor."""
+    def test_trains_gradient_boosting_by_default(self):
+        """Should train a GradientBoostingRegressor by default."""
         X = np.random.randn(100, 5)
         y = np.random.randn(100)
         
         model = train_model(X, y, n_estimators=10, max_depth=5)
+        
+        from sklearn.ensemble import GradientBoostingRegressor
+        assert isinstance(model, GradientBoostingRegressor)
+    
+    def test_trains_random_forest_when_specified(self):
+        """Should train a RandomForestRegressor when model_type='rf'."""
+        X = np.random.randn(100, 5)
+        y = np.random.randn(100)
+        
+        model = train_model(X, y, model_type="rf", n_estimators=10, max_depth=5)
         
         from sklearn.ensemble import RandomForestRegressor
         assert isinstance(model, RandomForestRegressor)
@@ -123,7 +145,7 @@ class TestEvaluateModel:
         y = np.random.randn(100)
         model = train_model(X, y, n_estimators=10)
         
-        metrics = evaluate_model(model, X, y, split_name="test")
+        metrics = evaluate_model(model, X, y, prefix="test")
         
         assert "test_mae" in metrics
         assert "test_rmse" in metrics
@@ -135,7 +157,7 @@ class TestEvaluateModel:
         y = np.random.randn(100)
         model = train_model(X, y, n_estimators=10)
         
-        metrics = evaluate_model(model, X, y, split_name="test")
+        metrics = evaluate_model(model, X, y, prefix="test")
         
         for value in metrics.values():
             assert np.isfinite(value)
