@@ -25,7 +25,6 @@ Environment Variables:
 import os
 import sys
 import logging
-import re
 from pathlib import Path
 
 import dlt

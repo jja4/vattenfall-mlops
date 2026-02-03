@@ -247,7 +247,6 @@ def create_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     df["hour_of_day"] = df["timestamp"].dt.hour
     
     # Cyclical encoding of hour (better for models)
-    import numpy as np
     df["hour_sin"] = np.sin(2 * np.pi * df["hour_of_day"] / 24)
     df["hour_cos"] = np.cos(2 * np.pi * df["hour_of_day"] / 24)
     

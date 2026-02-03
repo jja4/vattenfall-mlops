@@ -2,9 +2,8 @@ import os
 import requests
 import pandas as pd
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from dateutil.relativedelta import relativedelta
-from typing import Optional
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -51,7 +50,7 @@ class FingridClient:
         needs_chunking = time_delta.days > 30
         
         if needs_chunking:
-            print(f"  📅 Large date range detected, chunking by month...")
+            print("  📅 Large date range detected, chunking by month...")
             return self._get_dataset_chunked(dataset_id, start_time, end_time)
         else:
             return self._get_dataset_single(dataset_id, start_time, end_time)

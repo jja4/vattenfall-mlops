@@ -426,7 +426,7 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
     
     try:
-        results = run_training(
+        run_training(
             model_type=args.model,
             n_estimators=args.n_estimators,
             max_depth=args.max_depth,

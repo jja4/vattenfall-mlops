@@ -18,13 +18,12 @@ import asyncio
 import threading
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
-from typing import Optional
 import logging
 
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from dotenv import load_dotenv
 
 from app.schemas import HealthResponse, PredictionResponse, ErrorResponse, ModelReloadResponse
@@ -160,7 +159,7 @@ async def lifespan(app: FastAPI):
         # Load initial model
         _model, _feature_names, _scaler, _model_version, _model_created_at = _load_model_from_source()
         
-        logger.info(f"✓ Model loaded successfully")
+        logger.info("✓ Model loaded successfully")
         logger.info(f"  Version: {_model_version or 'unknown'}")
         logger.info(f"  Features: {len(_feature_names) if _feature_names else 'unknown'}")
         logger.info(f"  Scaler: {'yes' if _scaler else 'no'}")
@@ -254,7 +253,7 @@ async def reload_model():
         
         return ModelReloadResponse(
             success=True,
-            message=f"Model reloaded successfully",
+            message="Model reloaded successfully",
             old_version=old_version,
             new_version=version,
         )

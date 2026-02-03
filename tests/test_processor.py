@@ -4,7 +4,6 @@ Tests for the data processor.
 import pytest
 import pandas as pd
 import numpy as np
-from datetime import datetime
 
 from ingestion.processor import (
     resample_to_15min,
@@ -18,8 +17,6 @@ from ingestion.processor import (
     LAG_3H,
     ROLLING_1H,
     ROLLING_3H,
-    REQUIRED_RAW_COLUMNS,
-    REQUIRED_MERGED_COLUMNS,
 )
 
 

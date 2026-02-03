@@ -23,7 +23,7 @@ Usage:
 """
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Iterator, Optional
+from typing import Iterator
 
 import dlt
 from dlt.sources.helpers import requests

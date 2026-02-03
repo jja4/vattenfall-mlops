@@ -80,7 +80,6 @@ def read_dlt_table(table_name: str) -> pd.DataFrame:
     if AZURE_CONNECTION_STRING:
         # Read from Azure Blob Storage using adlfs
         from adlfs import AzureBlobFileSystem
-        import pyarrow.parquet as pq
         
         fs = AzureBlobFileSystem(connection_string=AZURE_CONNECTION_STRING)
         
@@ -143,8 +142,6 @@ def write_features(df: pd.DataFrame, partition_col: str = "date"):
     
     # Create partition column
     df[partition_col] = df["timestamp"].dt.date.astype(str)
-    
-    storage_opts = get_storage_options()
     
     if AZURE_CONNECTION_STRING:
         # Write to Azure Blob Storage
@@ -358,7 +355,7 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
     
     try:
-        results = run_feature_generation()
+        run_feature_generation()
         return 0
         
     except Exception as e:
