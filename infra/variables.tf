@@ -97,7 +97,7 @@ variable "container_memory" {
 variable "min_replicas" {
   description = "Minimum number of container replicas"
   type        = number
-  default     = 0
+  default     = 1
 }
 
 variable "max_replicas" {
