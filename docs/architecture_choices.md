@@ -57,7 +57,7 @@
 - Plotly generates interactive HTML server-side
 - Good enough for monitoring - not a customer-facing product
 
-**Alternative considered**: Streamlit, Grafana. Streamlit requires separate deployment. Grafana would be an improvement given more time.
+**Alternative considered**: Streamlit, Grafana, Evidently. Streamlit requires separate deployment. Grafana is available in Azure Monitoring, Evidently would be an improvement given more time.
 
 ---
 
@@ -87,7 +87,6 @@
 | **No data validation** | Bad data from Fingrid silently propagates | High |
 | **Batch predictions only** | `/predict` fetches live data - adds latency | Medium |
 | **No rollback mechanism** | If promoted model is bad, manual intervention needed | High |
-| **Hourly granularity** | DLT runs hourly - could miss intra-hour spikes | Low |
 
 ### Recommended Improvements
 
