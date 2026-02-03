@@ -17,12 +17,25 @@ on:
     types: [completed]
     branches: [main, pipeline]
   
+  # Run on push to pipeline branch for testing (bypasses workflow_run)
+  push:
+    branches: [pipeline]
+    paths:
+      - 'pipeline/features.py'
+      - 'ingestion/processor.py'
+      - '.github/workflows/features.yml'
+  
   # Also run daily at 2 AM to ensure features are up-to-date
   schedule:
     - cron: '0 2 * * *'
   
   # Allow manual trigger
   workflow_dispatch:
+
+# Ensure workflows run sequentially, not in parallel
+concurrency:
+  group: mlops-pipeline-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
@@ -31,6 +44,8 @@ jobs:
   features:
     name: Generate Features
     runs-on: ubuntu-latest
+    # Only run if the triggering workflow succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name != 'workflow_run' }}
     
     steps:
       - name: Checkout code

@@ -32,6 +32,11 @@ on:
         required: false
         default: '365'
 
+# Prevent concurrent runs
+concurrency:
+  group: mlops-pipeline-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}
   FINGRID_API_KEY: ${{ secrets.FINGRID_API_KEY }}
